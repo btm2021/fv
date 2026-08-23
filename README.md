@@ -1,112 +1,65 @@
-# Smart Money Concepts (SMC) Binance Futures Visualizer
+# SMC • VSR • Dual ATR Bot Real-Time Trading Engine (Pure JavaScript)
 
-Hệ thống tải dữ liệu Binance Futures, tự động tính toán toàn bộ chỉ báo Smart Money Concepts (SMC) bằng thư viện Python `joshyattridge/smart-money-concepts`, lưu trữ CSV và hiển thị biểu đồ tương tác qua **TradingView Lightweight Charts**.
+Hệ thống biểu đồ phân tích kỹ thuật thời gian thực chạy hoàn toàn bằng **Pure JavaScript**, kết nối trực tiếp đến **Binance Futures API & WebSocket**, tải và lưu trữ **20.000 nến (20k)** vào `localStorage` của trình duyệt, tích hợp các chỉ báo nâng cao (**SMC FVG**, **VSR 10-10**, **Dual ATR Bot VIDYA**) và công cụ đo lường chuyên nghiệp (**Shift + Click Measure**).
 
 ---
 
-## 📁 Cấu trúc thư mục
+## 📁 Cấu trúc thư mục dự án
 
 ```
 testforexflow/
-│
-├── smart_money_concepts/       # Thư viện gốc được clone từ github joshyattridge/smart-money-concepts
-├── config.json                 # Danh sách các dataset đã tải về (symbol, tf, candles, date)
-├── main.py                     # Script tải nến Binance Futures, tính toán SMC, cập nhật config.json
-├── run.py                      # Alias chạy script nhanh (python run.py ...)
-│
-├── data_raw/                   # Thư mục chứa dữ liệu thô (OHLCV) tải từ Binance Futures
-│   ├── BTCUSDT_15m.csv
-│   ├── ETHUSDT_15m.csv
-│   └── ...
-│
-├── data_analize/               # Thư mục chứa dữ liệu đã tính toán SMC (CSV)
-│   ├── BTCUSDT_15m.csv
-│   ├── ETHUSDT_15m.csv
-│   └── manifest.json
-│
-├── smc.js                      # JavaScript Engine port 1:1 thuật toán SMC (FVG)
-├── index.html                  # Giao diện tổng hợp hiển thị toàn bộ chỉ báo SMC
-├── stat2.html                  # Giao diện chuyên sâu phân tích FVG 100% Pure JavaScript (không qua Python)
-├── stat2.js                    # Logic tính toán & thống kê FVG trực tiếp trên trình duyệt
-├── stat2.css                   # Giao diện Dark Theme cho stat2
-├── style.css                   # Giao diện Dark Theme cho index.html
-└── libs/                       # Bản offline của Lightweight Charts & PapaParse
+├── index.html       # Giao diện chính (mở trực tiếp bằng Live Server)
+├── style.css        # Giao diện Dark Glassmorphism, Toolbar, Dropdown & Measure styles
+├── app.js           # Xử lý chính: Tải 20k nến, Caching, WebSocket, Search Symbol, Measure Tool
+├── smc.js           # Engine tính Smart Money Concepts (Fair Value Gap - FVG 1:1)
+├── vsr.js           # Engine tính Volume Spike Reversal (VSR 10-10 & Zones)
+├── atrbot.js        # Engine tính ATR Dynamic Trailing Stop (Hỗ trợ VIDYA CMO-9)
+├── libs/            # Thư viện cục bộ (TradingView Lightweight Charts v4, PapaParse)
+└── README.md        # Tài liệu hướng dẫn sử dụng
 ```
 
 ---
 
-## ⚡ Giao diện Pure JavaScript FVG (`stat2.html`)
+## 🚀 Các tính năng chính
 
-File [`stat2.html`](file:///c:/Users/Admin/Desktop/testforexflow/stat2.html) hoạt động **hoàn toàn trên trình duyệt** bằng `smc.js`, không cần chạy qua bất kỳ script Python nào:
-- **Tùy chọn nguồn dữ liệu**:
-  1. Đọc trực tiếp các file thô `data_raw/*.csv`.
-  2. Hoặc **Fetch Live trực tiếp từ Binance Futures API** ngay trên Web cho bất kỳ Symbol nào (BTC, ETH, SOL, XRP, DOGE,...) và timeframe nào.
-  3. Hoặc Upload file CSV từ máy tính.
-- **Tính toán FVG tức thì**: Gọi hàm `SMC.fvg()` trong `smc.js` tính toán 20.000 nến chỉ trong 15ms.
-- **Bảng thống kê FVG Dashboard**:
-  - Tổng số FVG, Tỷ lệ Mitigate (%), Số FVG Bullish / Bearish / Active.
-  - Số nến trung bình để Mitigate (`Avg Bars to Mitigate`), Kích thước Gap trung bình (`Avg Gap Size %`).
-  - Thanh trượt lọc khoảng cách tối thiểu (`Min Gap Size %`), lọc `Unmitigated Only`, `Merge Consecutive`.
-- **Bảng danh sách FVG tương tác**: Cho phép click vào bất kỳ FVG nào trong danh sách để biểu đồ tự động cuộn và phóng to đến đúng cây nến đó.
+### 1. Tải & Lưu trữ 20.000 nến vào `localStorage`
+- Tải phân đoạn 20.000 nến trực tiếp từ Binance Futures.
+- Lưu trữ dạng mảng nén (`[time, open, high, low, close, volume]`) chiếm chưa đến 1MB.
+- **Cache-First**: Mở trang là nạp ngay 20.000 nến trong **< 15ms**, tự động kiểm tra và kéo bù nến mới (Delta Sync).
 
----
+### 2. Tìm kiếm Symbol từ `exchangeInfo` & 24h Ticker
+- Tự động lấy hơn 700+ cặp coin USDT Perpetual từ `exchangeInfo`.
+- Hiển thị đầy đủ **Giá mới nhất**, **% Biến động 24h**, **Khối lượng giao dịch USDT 24h**.
+- Sắp xếp nhanh theo Volume (`Vol ▾`) hoặc % Tăng giảm (`Chg%`).
+- Lọc theo danh mục: `ALL`, `🔥 HOT`, `USDT`, `MEME`, `L1/L2`.
 
-## 🚀 Hướng dẫn sử dụng
+### 3. Bộ 3 chỉ báo phân tích kỹ thuật (Pure JavaScript)
+1. **SMC Fair Value Gap (FVG)**:
+   - Phát hiện chính xác khoảng trống thanh khoản Bullish (+FVG) và Bearish (-FVG).
+   - Theo dõi trạng thái đã lấp (Mitigated) hay chưa lấp (Active).
+   - Thống kê tỷ lệ Mitigation Rate, kích thước trung bình và bảng nhảy nến.
+2. **VSR (Volume Spike Reversal 10-10)**:
+   - Phát hiện đột biến khối lượng với ngưỡng chuẩn độ lệch chuẩn (10-10).
+   - Tự động vẽ vùng cản hỗ trợ/kháng cự Upper & Lower Zone và đánh dấu tia sét `⚡ VSR`.
+3. **Dual ATR Bot (VIDYA Moving Average)**:
+   - **ATR Bot 1 (Trend / Dài hạn)**: VIDYA chu kỳ 14, độ dài MA 55, hệ số Multiplier 4.0.
+   - **ATR Bot 2 (Scalp / Ngắn hạn)**: VIDYA chu kỳ 14, độ dài MA 21, hệ số Multiplier 2.0.
+   - Tự động hiển thị dải mây xu hướng (Trend Ribbon) và tín hiệu mũi tên Buy/Sell.
 
-### 1. Tải và tính toán dữ liệu SMC qua Python CLI
+### 4. Thước đo khoảng giá & số nến (Shift + Click Measure Tool)
+- Giữ phím **`Shift`** và click chuột trái trên biểu đồ để đo vùng giá.
+- Di chuột và click lần 2 để ghim thước đo cố định.
+- Thẻ thông số hiển thị trực tiếp: Biến động giá `$`, Tỷ lệ `%`, Số lượng nến `bars`, Thời gian `duration`, và Tổng khối lượng giao dịch `Volume`.
+- Nhấn phím **`Escape`** hoặc click chuột bình thường để đóng thước đo.
 
-Cú pháp lệnh:
-```bash
-python main.py <symbol> <timeframe> <limit>
-```
-
-**Ví dụ:**
-- Tải 20.000 nến BTCUSDT khung 15 phút (mặc định):
-  ```bash
-  python main.py BTCUSDT 15m 20000
-  ```
-- Tải 5.000 nến ETHUSDT khung 1h:
-  ```bash
-  python main.py ETHUSDT 1h 5000
-  ```
-- Tải 10.000 nến SOLUSDT khung 5m:
-  ```bash
-  python main.py SOLUSDT 5m 10000
-  ```
-
-> Script sẽ tự động:
-> 1. Tải nến từ Binance Futures với cơ chế phân trang ngược thời gian.
-> 2. Lưu file gốc vào `data_raw/<symbol>_<timeframe>.csv`.
-> 3. Tính toán toàn bộ các thành phần SMC bằng thư viện Python.
-> 4. Xuất file kết quả vào `data_analize/<symbol>_<timeframe>.csv`.
+### 5. Sidebar trượt ẩn/hiện & Phím tắt
+- Bấm nút `◀` trên Sidebar để ẩn bảng chỉ báo sang mép trái, biểu đồ tự bung 100% màn hình.
+- Phím tắt: **`[`** hoặc **`Ctrl + B`** để ẩn/hiện Sidebar nhanh.
 
 ---
 
-### 2. Mở giao diện biểu đồ HTML qua Live Server
+## 💻 Cách chạy ứng dụng
 
-1. Cài đặt extension **Live Server** trên VS Code (hoặc chạy lệnh `npx live-server` trong thư mục này).
-2. Chuột phải vào file `index.html` chọn **Open with Live Server**.
-3. Biểu đồ sẽ tự động load file `data_analize/BTCUSDT_15m.csv`.
-4. Bạn có thể chọn cặp coin / timeframe khác trên thanh công cụ và nhấn **Load Data** hoặc bấm **Select CSV** để duyệt file tùy ý.
-
----
-
-## 📊 Các thành phần Smart Money Concepts được hiển thị
-
-| Thành phần SMC | Mô tả & Cách hiển thị |
-| :--- | :--- |
-| **Fair Value Gaps (FVG)** | Vùng mất cân bằng giá (Imbalance), hiển thị dạng hộp bán trong suốt màu Xanh (Bullish) và Đỏ (Bearish) kéo dài từ nến xuất hiện đến nến Mitigated. |
-| **Order Blocks (OB)** | Vùng gom lệnh tổ chức, hiển thị dạng hộp màu Xanh lam / Tím kèm phần trăm sức mạnh volume. |
-| **Market Structure (BOS & CHoCH)** | Đường đứt nét Break of Structure (BOS) và Change of Character (CHoCH) kèm huy hiệu phân loại. |
-| **Swing Highs & Lows (SH / SL)** | Điểm đỉnh/đáy đảo chiều kèm mức giá (▲ SH / ▼ SL). |
-| **Liquidity Pools** | Vùng thanh khoản ngang (Equal Highs / Lows) và đánh dấu khi thanh khoản bị quét (`$$$ SWEPT`). |
-| **Previous Day High / Low (PDH / PDL)** | Các mức đỉnh và đáy ngày hôm trước. |
-| **Volume Sub-Pane** | Thanh khối lượng mua/bán ở khung dưới biểu đồ. |
-
----
-
-## 🛠️ Tùy chỉnh & Tắt mở trên giao diện
-
-- Mỗi chỉ báo đều có công tắc **Bật / Tắt riêng biệt**.
-- Có bộ lọc chuyên sâu (VD: Chỉ xem FVG / Order Blocks chưa bị mitigate - *Unmitigated Only*).
-- Nút **Enable All** / **Disable All** để chuyển đổi nhanh toàn bộ chỉ báo.
+1. Mở thư mục `testforexflow` trong VS Code.
+2. Click chuột phải vào `index.html` và chọn **Open with Live Server** (hoặc mở cổng `http://localhost:5500/index.html`).
+3. Ứng dụng tự động kết nối và tải nến trực tiếp từ Binance Futures mà không cần cài đặt thêm bất kỳ phần mềm hay Python backend nào.
