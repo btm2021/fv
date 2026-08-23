@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SMC FVG, VSR & Dual ATR Bot Real-Time Engine (Pure JavaScript)</title>
   <link rel="stylesheet" href="style.css">
   <!-- Fonts -->
@@ -153,20 +156,6 @@
   <main class="workspace" id="workspaceContainer">
     <!-- Center Chart Container (100% Full Width) -->
     <div class="chart-wrapper">
-      <!-- Floating OHLCV & Indicators Inspector Legend -->
-      <div class="chart-legend" id="chartLegend">
-        <div class="legend-symbol" id="legendSymbol">BTCUSDT (15m) • SMC + VSR + Dual ATR Bot</div>
-        <div class="legend-ohlc">
-          <span class="lbl">O:</span> <span class="val" id="legOpen">--</span>
-          <span class="lbl">H:</span> <span class="val" id="legHigh">--</span>
-          <span class="lbl">L:</span> <span class="val" id="legLow">--</span>
-          <span class="lbl">C:</span> <span class="val" id="legClose">--</span>
-          <span class="lbl">Vol:</span> <span class="val" id="legVol">--</span>
-          <span class="lbl">Change:</span> <span class="val" id="legChange">--</span>
-        </div>
-        <div class="legend-details-row" id="legendDetails"></div>
-      </div>
-
       <!-- TradingView Lightweight Chart Container -->
       <div id="chartContainer" class="chart-container"></div>
       

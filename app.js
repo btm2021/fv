@@ -142,14 +142,6 @@
     statCandles: document.getElementById('statCandles'),
     chartContainer: document.getElementById('chartContainer'),
     overlayCanvas: document.getElementById('fvgOverlayCanvas'),
-    legendSymbol: document.getElementById('legendSymbol'),
-    legOpen: document.getElementById('legOpen'),
-    legHigh: document.getElementById('legHigh'),
-    legLow: document.getElementById('legLow'),
-    legClose: document.getElementById('legClose'),
-    legVol: document.getElementById('legVol'),
-    legChange: document.getElementById('legChange'),
-    legendDetails: document.getElementById('legendDetails'),
     activeIndicatorsCount: document.getElementById('activeIndicatorsCount'),
     btnResetSettings: document.getElementById('btnResetSettings'),
 
@@ -1047,17 +1039,44 @@
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => scheduleOverlayRender());
     chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleOverlayRender());
     chart.subscribeCrosshairMove((p) => updateCrosshairLegend(p));
+
+    window.addEventListener('resize', () => {
+      if (chart && el.chartContainer) {
+        const w = el.chartContainer.clientWidth;
+        const h = el.chartContainer.clientHeight;
+        if (w > 0 && h > 0) {
+          chart.resize(w, h);
+          resizeCanvas();
+          scheduleOverlayRender();
+        }
+      }
+    });
+
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => {
+        if (chart && el.chartContainer) {
+          const w = el.chartContainer.clientWidth;
+          const h = el.chartContainer.clientHeight;
+          if (w > 0 && h > 0) {
+            chart.resize(w, h);
+            resizeCanvas();
+            scheduleOverlayRender();
+          }
+        }
+      }, 150);
+    });
   }
 
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     const w = el.chartContainer.clientWidth;
     const h = el.chartContainer.clientHeight;
-    el.overlayCanvas.width = w * dpr;
-    el.overlayCanvas.height = h * dpr;
+    if (w === 0 || h === 0) return;
+    el.overlayCanvas.width = Math.round(w * dpr);
+    el.overlayCanvas.height = Math.round(h * dpr);
     el.overlayCanvas.style.width = w + 'px';
     el.overlayCanvas.style.height = h + 'px';
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   // --- Dynamic PriceScale Detection ---
@@ -1507,7 +1526,6 @@
     volumeSeries.setData(state.volumeData);
 
     el.statCandles.textContent = state.chartData.length.toLocaleString();
-    el.legendSymbol.textContent = `${state.symbol} (${state.timeframe}) • SMC + VSR + Dual ATR Bot`;
 
     // 100% Client-side JS calculations
     recalculateFVG();
@@ -1700,7 +1718,6 @@
             position: 'aboveBar',
             color: '#facc15',
             shape: 'circle',
-            text: `⚡ VSR (${item.signal.toFixed(1)}x)`,
             size: 1
           });
         }
@@ -2042,13 +2059,6 @@
       ctx.lineWidth = 1;
       ctx.fillRect(startX, boxY, boxWidth, boxHeight);
       ctx.strokeRect(startX, boxY, boxWidth, boxHeight);
-
-      if (boxWidth > 32) {
-        ctx.fillStyle = isBull ? '#10b981' : '#f43f5e';
-        ctx.font = '10px "JetBrains Mono", monospace';
-        const label = isBull ? `+FVG (${item.sizePct.toFixed(2)}%)` : `-FVG (${item.sizePct.toFixed(2)}%)`;
-        ctx.fillText(label, startX + 4, boxY + 11);
-      }
       ctx.restore();
     }
   }
@@ -2220,7 +2230,7 @@
       const price = candleSeries.coordinateToPrice(param.point.y);
       measure.lastCrosshair = {
         time: param.time,
-        price: price !== null ? price : (candle ? candle.close : null),
+        price: price !== null ? price : null,
         x: param.point.x,
         y: param.point.y
       };
@@ -2230,61 +2240,6 @@
         scheduleOverlayRender();
       }
     }
-
-    const candle = param.seriesData.get(candleSeries);
-    const vol = param.seriesData.get(volumeSeries);
-
-    const open = candle.open;
-    const high = candle.high;
-    const low = candle.low;
-    const close = candle.close;
-    const change = ((close - open) / open * 100).toFixed(2);
-    const isUp = close >= open;
-
-    el.legOpen.textContent = formatPrice(open);
-    el.legHigh.textContent = formatPrice(high);
-    el.legLow.textContent = formatPrice(low);
-    el.legClose.textContent = formatPrice(close);
-    el.legClose.className = `val ${isUp ? 'val-up' : 'val-down'}`;
-    el.legChange.textContent = `${isUp ? '+' : ''}${change}%`;
-    el.legChange.className = `val ${isUp ? 'val-up' : 'val-down'}`;
-
-    if (vol && vol.value !== undefined) {
-      el.legVol.textContent = Number(vol.value).toLocaleString(undefined, { maximumFractionDigits: 1 });
-    }
-
-    let detailsHtml = '';
-
-    // FVG info
-    const matchFVG = state.fvgList.find(f => f.time === param.time);
-    if (matchFVG) {
-      const isBull = matchFVG.fvg === 1;
-      const statusStr = matchFVG.mitigatedIndex !== null ? `Mit @ #${matchFVG.mitigatedIndex}` : 'Active';
-      detailsHtml += `<span class="badge-tag ${isBull ? 'badge-fvg-tag' : 'badge-bear'}">${isBull ? '+FVG' : '-FVG'} (${formatPrice(matchFVG.bottom)} - ${formatPrice(matchFVG.top)} • ${statusStr})</span>`;
-    }
-
-    // VSR info
-    const matchVSR = state.vsrData.find(v => v.time === param.time);
-    if (matchVSR && matchVSR.upper !== null) {
-      const isSpike = matchVSR.isSpike;
-      detailsHtml += `<span class="badge-tag badge-vsr-tag">VSR [${formatPrice(matchVSR.lower)} - ${formatPrice(matchVSR.upper)}]${isSpike ? ' ⚡ SPIKE' : ''}</span>`;
-    }
-
-    // ATR Bot 1 (Slow)
-    const matchATR1 = state.atr1Data.find(a => a.time === param.time);
-    if (matchATR1 && state.atr1.enable) {
-      const isBull = matchATR1.trail1 >= matchATR1.trail2;
-      detailsHtml += `<span class="badge-tag badge-purple-tag">ATR1(55): T1=${formatPrice(matchATR1.trail1)} | T2=${formatPrice(matchATR1.trail2)} (${isBull ? 'BULL' : 'BEAR'})</span>`;
-    }
-
-    // ATR Bot 2 (Fast)
-    const matchATR2 = state.atr2Data.find(a => a.time === param.time);
-    if (matchATR2 && state.atr2.enable) {
-      const isBull = matchATR2.trail1 >= matchATR2.trail2;
-      detailsHtml += `<span class="badge-tag badge-atr-tag">ATR2(21): T1=${formatPrice(matchATR2.trail1)} | T2=${formatPrice(matchATR2.trail2)} (${isBull ? 'BULL' : 'BEAR'})</span>`;
-    }
-
-    el.legendDetails.innerHTML = detailsHtml;
   }
 
   function setStatus(type, msg) {
