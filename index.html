@@ -36,41 +36,13 @@
       <!-- Icon Logo -->
       <div class="logo-icon" title="SMC • VSR • Dual ATR Engine">SMC</div>
 
-      <!-- Searchable Symbol Picker Dropdown -->
+      <!-- Searchable Symbol Picker Button -->
       <div class="symbol-picker-wrapper" id="symbolPickerWrapper">
-        <button class="symbol-picker-btn" id="btnOpenSymbolPicker" title="Search symbol (700+ Binance Futures)">
+        <button class="symbol-picker-btn" id="btnOpenSymbolPicker" title="Select Symbol & Market (Forex, Stocks, Indices, Commodities, Crypto)">
           <span class="search-icon">🔍</span>
           <span class="active-symbol-text" id="activeSymbolText">BTCUSDT</span>
           <span class="dropdown-arrow">▾</span>
         </button>
-
-        <!-- Search Dropdown Panel -->
-        <div class="symbol-dropdown-panel" id="symbolDropdownPanel">
-          <div class="search-input-header">
-            <input type="text" id="symbolSearchInput" placeholder="Search symbol or coin (BTC, ETH, PEPE)..." autocomplete="off">
-            <span class="symbols-count-badge" id="symbolsCountBadge">Loading...</span>
-          </div>
-
-          <!-- Quick Filter & Sort Toolbar -->
-          <div class="dropdown-toolbar">
-            <div class="quick-filter-tags">
-              <button class="tag-btn active" data-filter="ALL">ALL</button>
-              <button class="tag-btn" data-filter="HOT">🔥 HOT</button>
-              <button class="tag-btn" data-filter="USDT">USDT</button>
-              <button class="tag-btn" data-filter="MEME">MEME</button>
-              <button class="tag-btn" data-filter="LAYER1">L1/L2</button>
-            </div>
-            <div class="sort-buttons">
-              <button class="sort-btn active" id="btnSortVol" title="Sort by 24h Volume">Vol ▾</button>
-              <button class="sort-btn" id="btnSortChg" title="Sort by 24h % Change">Chg%</button>
-            </div>
-          </div>
-
-          <!-- Filtered Symbol List with 24h Tickers -->
-          <div class="symbol-list-container" id="symbolListContainer">
-            <div class="symbol-list-loading">Fetching tickers...</div>
-          </div>
-        </div>
       </div>
 
       <!-- Compact 24h Ticker Quick Info -->
@@ -83,7 +55,7 @@
       <div class="v-divider"></div>
 
       <!-- Timeframe Selector -->
-      <div class="header-select-box" title="Timeframe">
+      <div class="header-select-box" id="timeframeBox" title="Timeframe">
         <select id="liveTimeframe" class="tf-select">
           <option value="1m">1m</option>
           <option value="3m">3m</option>
@@ -125,20 +97,13 @@
         <span class="btn-icon">📏</span>
       </button>
 
-      <!-- Live WebSocket Stream Toggle -->
-      <label class="live-stream-toggle" title="Toggle Realtime WebSocket">
-        <input type="checkbox" id="toggleLiveStream" checked>
-        <span class="live-pulse"></span>
-        <span class="live-text">WS</span>
-      </label>
-
       <!-- Settings Modal Button -->
       <button id="btnOpenSettings" class="icon-action-btn settings-btn" title="Indicators & Analytics Settings (S or Ctrl+,)">
         <span class="btn-icon">⚙️</span>
       </button>
 
       <!-- Minimal Status Indicator -->
-      <div id="statusBadge" class="status-badge status-loading" title="Binance Status">
+      <div id="statusBadge" class="status-badge status-loading" title="Engine Status">
         <span class="status-dot"></span>
         <span id="statusText">Connecting...</span>
       </div>
@@ -163,6 +128,44 @@
       <canvas id="fvgOverlayCanvas" class="fvg-canvas"></canvas>
     </div>
   </main>
+
+  <!-- ==========================================================================
+       Large Symbol Search & Market Selection Modal
+       ========================================================================== -->
+  <div id="symbolModalOverlay" class="symbol-modal-overlay">
+    <div class="symbol-modal-container">
+      <!-- Modal Header: Search & Close Button -->
+      <div class="symbol-modal-header">
+        <div class="symbol-search-bar">
+          <span class="symbol-search-icon">🔍</span>
+          <input type="text" id="symbolSearchInput" placeholder="Search markets (EUR/USD, AAPL, BTC, S&P 500, Gold)..." autocomplete="off" spellcheck="false">
+          <span class="symbols-count-badge" id="symbolsCountBadge">Loading...</span>
+        </div>
+        <button class="symbol-modal-close" id="btnCloseSymbolModal" title="Close (ESC)">✕</button>
+      </div>
+
+      <!-- Quick Category Filter & Sorting Tabs -->
+      <div class="symbol-modal-toolbar">
+        <div class="quick-filter-tags">
+          <button class="tag-btn active" data-filter="ALL">ALL</button>
+          <button class="tag-btn" data-filter="FOREX">💱 FOREX</button>
+          <button class="tag-btn" data-filter="STOCKS">📈 STOCKS</button>
+          <button class="tag-btn" data-filter="INDICES">🌐 INDICES</button>
+          <button class="tag-btn" data-filter="COMMODITIES">🛢 COMMODITIES</button>
+          <button class="tag-btn" data-filter="CRYPTO">⚡ CRYPTO</button>
+        </div>
+        <div class="sort-buttons" id="cryptoSortControls">
+          <button class="sort-btn active" id="btnSortVol" title="Sort by 24h Volume">Vol ▾</button>
+          <button class="sort-btn" id="btnSortChg" title="Sort by 24h % Change">Chg%</button>
+        </div>
+      </div>
+
+      <!-- Main Modal Body for Symbols List / Grid Table -->
+      <div class="symbol-modal-body" id="symbolListContainer">
+        <div class="symbol-list-loading">Fetching markets data...</div>
+      </div>
+    </div>
+  </div>
 
   <!-- ==========================================================================
        Indicators & Analytics Configuration Modal

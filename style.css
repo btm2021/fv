@@ -154,6 +154,23 @@ body {
   color: var(--text-main);
 }
 
+.header-select-box.is-fixed {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.4);
+  cursor: not-allowed;
+}
+
+.header-select-box.is-fixed:hover {
+  border-color: rgba(168, 85, 247, 0.6);
+}
+
+.tf-select:disabled {
+  cursor: not-allowed;
+  color: #c084fc;
+  font-weight: 700;
+  opacity: 0.95;
+}
+
 /* Header Action Icon Buttons */
 .icon-action-btn {
   width: 28px;
@@ -359,227 +376,411 @@ body {
   font-size: 10px;
 }
 
-/* Floating Dropdown Panel */
-.symbol-dropdown-panel {
+/* ==========================================================================
+   Large Dedicated Symbol & Market Selection Modal
+   ========================================================================== */
+
+.symbol-modal-overlay {
   display: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  width: 380px;
-  max-width: calc(100vw - 16px);
-  background: #121824;
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
-  z-index: 1000;
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.78);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.symbol-modal-overlay.show {
+  display: flex;
+  animation: modal-fade 0.18s ease-out;
+}
+
+.symbol-modal-container {
+  width: 100%;
+  max-width: 960px;
+  height: 660px;
+  max-height: calc(100dvh - 32px);
+  background: #111622;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  display: flex;
   flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(6, 182, 212, 0.15);
   overflow: hidden;
 }
 
-.symbol-dropdown-panel.show {
-  display: flex;
-  animation: dropdown-fade 0.18s ease-out;
-}
-
-@keyframes dropdown-fade {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.search-input-header {
-  padding: 8px 10px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-color);
+/* Modal Search Header */
+.symbol-modal-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
+  padding: 14px 18px;
+  background: #161c2b;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.search-input-header input {
+.symbol-search-bar {
   flex: 1;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 8px 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.symbol-search-bar:focus-within {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.25);
+}
+
+.symbol-search-icon {
+  font-size: 16px;
+  opacity: 0.8;
+}
+
+.symbol-search-bar input {
+  flex: 1;
+  background: transparent;
+  border: none;
   color: #ffffff;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 15px;
+  font-weight: 500;
   outline: none;
   min-width: 0;
 }
 
-.search-input-header input:focus {
-  border-color: var(--accent-cyan);
-}
-
-.symbols-count-badge {
-  font-size: 10px;
+.symbol-search-bar input::placeholder {
   color: var(--text-dim);
-  font-family: var(--font-mono);
-  white-space: nowrap;
+  font-size: 13px;
 }
 
-.dropdown-toolbar {
+.symbol-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.symbol-modal-close:hover {
+  background: rgba(244, 63, 94, 0.2);
+  color: #f43f5e;
+}
+
+/* Modal Toolbar Tabs */
+.symbol-modal-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
-  background: rgba(18, 24, 36, 0.95);
+  padding: 10px 18px;
+  background: #131824;
   border-bottom: 1px solid var(--border-color);
-  gap: 6px;
+  gap: 10px;
   overflow-x: auto;
 }
 
-.quick-filter-tags {
+.symbol-modal-toolbar .quick-filter-tags {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
 
-.quick-filter-tags::-webkit-scrollbar {
+.symbol-modal-toolbar .quick-filter-tags::-webkit-scrollbar {
   display: none;
 }
 
-.tag-btn {
+.symbol-modal-toolbar .tag-btn {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 3px 6px;
+  padding: 5px 12px;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: all 0.15s;
   white-space: nowrap;
-  min-height: 24px;
+  min-height: 28px;
 }
 
-.tag-btn:hover {
+.symbol-modal-toolbar .tag-btn:hover {
   background: var(--border-light);
-  color: #fff;
+  color: #ffffff;
 }
 
-.tag-btn.active {
-  background: rgba(6, 182, 212, 0.25);
+.symbol-modal-toolbar .tag-btn.active {
+  background: rgba(6, 182, 212, 0.22);
   border-color: #06b6d4;
   color: #38bdf8;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.25);
 }
 
-.sort-buttons {
+.symbol-modal-toolbar .sort-buttons {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
 
-.sort-btn {
+.symbol-modal-toolbar .sort-btn {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 3px;
+  border-radius: 5px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   font-family: var(--font-mono);
-  padding: 3px 6px;
+  padding: 4px 8px;
   cursor: pointer;
-  min-height: 24px;
+  min-height: 28px;
 }
 
-.sort-btn.active {
+.symbol-modal-toolbar .sort-btn.active {
   background: rgba(16, 185, 129, 0.2);
   border-color: #10b981;
   color: #10b981;
 }
 
-.symbol-list-container {
-  max-height: 320px;
+/* Modal Body */
+.symbol-modal-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 2px 0;
-  display: flex;
-  flex-direction: column;
+  background: #0d111a;
+  padding: 4px 0;
   -webkit-overflow-scrolling: touch;
 }
 
-.symbol-list-container::-webkit-scrollbar {
-  width: 5px;
+.symbol-modal-body::-webkit-scrollbar {
+  width: 6px;
 }
-.symbol-list-container::-webkit-scrollbar-thumb {
+
+.symbol-modal-body::-webkit-scrollbar-thumb {
   background: var(--border-light);
   border-radius: 3px;
 }
 
 .symbol-list-loading {
-  padding: 20px;
+  padding: 40px 20px;
   text-align: center;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-dim);
   font-family: var(--font-mono);
 }
 
-.symbol-item {
+/* ==========================================================================
+   Evenly Divided Grid Table for Yahoo Markets (Forex, Stocks, Indices, Commodities)
+   ========================================================================== */
+.symbol-grid-table {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(205px, 1fr));
+  gap: 10px;
+  padding: 16px;
+}
+
+.symbol-grid-card {
+  background: #141b27;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.symbol-grid-card:hover {
+  background: rgba(6, 182, 212, 0.14);
+  border-color: rgba(6, 182, 212, 0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.symbol-grid-card:active {
+  transform: translateY(0);
+}
+
+.symbol-grid-card.selected {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.3);
+}
+
+.symbol-grid-card .card-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 10px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(38, 48, 66, 0.3);
-  transition: background 0.1s ease;
-  min-height: 38px;
-}
-
-.symbol-item:hover,
-.symbol-item.selected {
-  background: rgba(6, 182, 212, 0.15);
-}
-
-.symbol-item:active {
-  background: rgba(6, 182, 212, 0.25);
-}
-
-.symbol-left-info {
-  display: flex;
-  align-items: baseline;
   gap: 6px;
-  min-width: 100px;
 }
 
-.symbol-name {
+.symbol-grid-card .card-symbol {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: #ffffff;
 }
 
-.symbol-asset {
+.symbol-grid-card .card-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   Structured Table List for Binance Crypto
+   ========================================================================== */
+.crypto-table-header {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 1fr 1.2fr;
+  padding: 10px 18px;
+  background: #141b27;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.crypto-table-header .th-right,
+.crypto-row .td-right {
+  text-align: right;
+}
+
+.crypto-table-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.crypto-row {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 1fr 1.2fr;
+  align-items: center;
+  padding: 10px 18px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.12s ease;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.crypto-row:hover {
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.crypto-row.selected {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+}
+
+.crypto-row .sym-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crypto-row .sym-title {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.crypto-row .sym-desc {
   font-size: 10px;
   color: var(--text-dim);
 }
 
-.symbol-right-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  margin-left: auto;
-}
-
-.symbol-price {
+.crypto-row .sym-price {
   color: #ffffff;
   font-weight: 600;
-  min-width: 60px;
-  text-align: right;
 }
 
-.symbol-chg {
-  font-size: 10px;
+.crypto-row .sym-chg.up {
+  color: var(--bull-green);
+}
+
+.crypto-row .sym-chg.down {
+  color: var(--bear-red);
+}
+
+.crypto-row .sym-vol {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Mixed Category Section Divider in ALL view */
+.category-section-title {
+  padding: 14px 18px 8px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 1px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.category-section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+/* Category Badges */
+.sym-badge {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 5px;
   border-radius: 3px;
-  min-width: 48px;
-  text-align: right;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.badge-forex {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+.badge-stock {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+.badge-index {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.badge-comm {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.badge-crypto {
+  background: rgba(6, 182, 212, 0.2);
+  color: #22d3ee;
+  border: 1px solid rgba(6, 182, 212, 0.4);
 }
 
 .symbol-chg.up {
@@ -1459,27 +1660,54 @@ body {
     display: none !important;
   }
 
-  /* Full Screen Overlay Dropdown on Mobile */
-  .symbol-dropdown-panel {
-    position: fixed;
-    top: calc(var(--header-height) + var(--sat) + 4px);
-    left: max(6px, var(--sal));
-    right: max(6px, var(--sar));
-    width: auto;
-    max-width: none;
-    max-height: calc(100dvh - var(--header-height) - var(--sat) - 14px);
-    border-radius: 10px;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
+  /* Full Screen Symbol Modal on Mobile */
+  .symbol-modal-overlay {
+    padding: 0;
   }
 
-  .search-input-header input {
+  .symbol-modal-container {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+  }
+
+  .symbol-modal-header {
+    padding: 10px 12px;
+  }
+
+  .symbol-search-bar input {
     font-size: 16px; /* Prevents auto-zoom in iOS Safari */
-    padding: 7px 10px;
   }
 
-  .symbol-item {
-    min-height: 42px;
-    padding: 8px 10px;
+  .symbol-modal-toolbar {
+    padding: 8px 12px;
+  }
+
+  .symbol-grid-table {
+    grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .symbol-grid-card {
+    padding: 10px 12px;
+  }
+
+  .crypto-table-header {
+    grid-template-columns: 1.8fr 1fr 1fr;
+    padding: 8px 12px;
+  }
+  .crypto-table-header .th-vol {
+    display: none;
+  }
+
+  .crypto-row {
+    grid-template-columns: 1.8fr 1fr 1fr;
+    padding: 9px 12px;
+  }
+  .crypto-row .sym-vol {
+    display: none;
   }
 
   /* Responsive Floating Legend on Mobile */

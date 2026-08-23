@@ -22,16 +22,18 @@ testforexflow/
 
 ## 🚀 Các tính năng chính
 
-### 1. Tải & Lưu trữ 20.000 nến vào `localStorage`
-- Tải phân đoạn 20.000 nến trực tiếp từ Binance Futures.
-- Lưu trữ dạng mảng nén (`[time, open, high, low, close, volume]`) chiếm chưa đến 1MB.
+### 1. Tải & Lưu trữ 20.000 nến vào `localStorage` (Crypto & Forex)
+- Hỗ trợ cả **Binance Futures API** (Crypto) và **Yahoo Finance API v8** (Forex, Vàng `GC=F`, DXY, Dầu thô `CL=F`, v.v.).
+- Tải lên đến 20.000 nến lịch sử và lưu trữ dạng mảng nén (`[time, open, high, low, close, volume]`) vào `localStorage`.
 - **Cache-First**: Mở trang là nạp ngay 20.000 nến trong **< 15ms**, tự động kiểm tra và kéo bù nến mới (Delta Sync).
+- **Multi-tier CORS Resilience**: Tự động chuyển đổi mượt mà qua các kênh kết nối và proxy dự phòng nếu trình duyệt gặp hạn chế CORS.
+- **Real-time Live Streaming**: Tự động stream WebSocket cho Binance và vòng lặp Live Polling 5s cho Yahoo Forex.
 
-### 2. Tìm kiếm Symbol từ `exchangeInfo` & 24h Ticker
-- Tự động lấy hơn 700+ cặp coin USDT Perpetual từ `exchangeInfo`.
-- Hiển thị đầy đủ **Giá mới nhất**, **% Biến động 24h**, **Khối lượng giao dịch USDT 24h**.
+### 2. Tìm kiếm Symbol & Lọc Danh mục
+- Hỗ trợ toàn bộ cặp tiền tệ Forex chính (`EURUSD=X`, `GBPUSD=X`, `USDJPY=X`, `USDVND=X`, `GC=F` Vàng, v.v.) và hơn 700+ cặp coin USDT Perpetual.
+- Hiển thị đầy đủ **Giá mới nhất**, **% Biến động 24h**, **Khối lượng giao dịch**.
 - Sắp xếp nhanh theo Volume (`Vol ▾`) hoặc % Tăng giảm (`Chg%`).
-- Lọc theo danh mục: `ALL`, `🔥 HOT`, `USDT`, `MEME`, `L1/L2`.
+- Lọc theo danh mục: `ALL`, `💱 FOREX`, `🔥 HOT`, `USDT`, `MEME`, `L1/L2`.
 
 ### 3. Bộ 3 chỉ báo phân tích kỹ thuật (Pure JavaScript)
 1. **SMC Fair Value Gap (FVG)**:

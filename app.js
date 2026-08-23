@@ -28,6 +28,65 @@
     'POLUSDT', 'SEIUSDT', 'INJUSDT', 'FTMUSDT', 'ATOMUSDT', 'ALGOUSDT'
   ]);
 
+  const YAHOO_MARKETS = {
+    forex: [
+      'EURUSD=X', 'GBPUSD=X', 'JPY=X', 'CHF=X', 'AUDUSD=X', 'CAD=X', 'NZDUSD=X',
+      'EURGBP=X', 'EURJPY=X', 'EURCHF=X', 'EURAUD=X', 'EURCAD=X', 'GBPJPY=X',
+      'GBPCHF=X', 'GBPAUD=X', 'AUDJPY=X', 'AUDCAD=X', 'AUDNZD=X', 'CADJPY=X',
+      'CHFJPY=X', 'NZDJPY=X'
+    ],
+    stocks: [
+      'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AVGO', 'GOOG', 'BRK-B',
+      'JPM', 'V', 'MA', 'WMT', 'LLY', 'XOM', 'JNJ', 'ORCL', 'COST', 'NFLX',
+      'AMD', 'CRM', 'ADBE', 'INTC', 'QCOM', 'MU', 'AMAT', 'CSCO', 'IBM', 'UBER',
+      'ABNB', 'SHOP', 'PLTR', 'COIN', 'BAC', 'GS', 'MS', 'WFC', 'KO', 'PEP',
+      'MCD', 'NKE', 'DIS', 'PFE', 'MRK', 'UNH', 'CVX', 'CAT', 'BA', 'GE'
+    ],
+    indices: [
+      '^GSPC', '^DJI', '^IXIC', '^RUT', '^VIX',
+      '^FTSE', '^GDAXI', '^FCHI', '^N225', '^HSI'
+    ],
+    commodities: [
+      'GC=F', 'SI=F', 'CL=F', 'BZ=F', 'NG=F',
+      'HG=F', 'PL=F', 'PA=F', 'ZC=F', 'ZW=F'
+    ]
+  };
+
+  const SYMBOL_NAMES = {
+    // Forex
+    'EURUSD=X': 'EUR/USD', 'GBPUSD=X': 'GBP/USD', 'JPY=X': 'USD/JPY', 'CHF=X': 'USD/CHF',
+    'AUDUSD=X': 'AUD/USD', 'CAD=X': 'USD/CAD', 'NZDUSD=X': 'NZD/USD', 'EURGBP=X': 'EUR/GBP',
+    'EURJPY=X': 'EUR/JPY', 'EURCHF=X': 'EUR/CHF', 'EURAUD=X': 'EUR/AUD', 'EURCAD=X': 'EUR/CAD',
+    'GBPJPY=X': 'GBP/JPY', 'GBPCHF=X': 'GBP/CHF', 'GBPAUD=X': 'GBP/AUD', 'AUDJPY=X': 'AUD/JPY',
+    'AUDCAD=X': 'AUD/CAD', 'AUDNZD=X': 'AUD/NZD', 'CADJPY=X': 'CAD/JPY', 'CHFJPY=X': 'CHF/JPY',
+    'NZDJPY=X': 'NZD/JPY',
+
+    // Stocks
+    'AAPL': 'Apple Inc.', 'MSFT': 'Microsoft Corp.', 'NVDA': 'NVIDIA Corp.', 'AMZN': 'Amazon.com Inc.',
+    'GOOGL': 'Alphabet Class A', 'META': 'Meta Platforms', 'TSLA': 'Tesla Inc.', 'AVGO': 'Broadcom Inc.',
+    'GOOG': 'Alphabet Class C', 'BRK-B': 'Berkshire Hathaway', 'JPM': 'JPMorgan Chase', 'V': 'Visa Inc.',
+    'MA': 'Mastercard Inc.', 'WMT': 'Walmart Inc.', 'LLY': 'Eli Lilly & Co.', 'XOM': 'Exxon Mobil',
+    'JNJ': 'Johnson & Johnson', 'ORCL': 'Oracle Corp.', 'COST': 'Costco Wholesale', 'NFLX': 'Netflix Inc.',
+    'AMD': 'Advanced Micro Devices', 'CRM': 'Salesforce Inc.', 'ADBE': 'Adobe Inc.', 'INTC': 'Intel Corp.',
+    'QCOM': 'Qualcomm Inc.', 'MU': 'Micron Technology', 'AMAT': 'Applied Materials', 'CSCO': 'Cisco Systems',
+    'IBM': 'IBM Corp.', 'UBER': 'Uber Tech.', 'ABNB': 'Airbnb Inc.', 'SHOP': 'Shopify Inc.',
+    'PLTR': 'Palantir Tech.', 'COIN': 'Coinbase Global', 'BAC': 'Bank of America', 'GS': 'Goldman Sachs',
+    'MS': 'Morgan Stanley', 'WFC': 'Wells Fargo', 'KO': 'Coca-Cola Co.', 'PEP': 'PepsiCo Inc.',
+    'MCD': 'McDonald\'s Corp.', 'NKE': 'Nike Inc.', 'DIS': 'Walt Disney', 'PFE': 'Pfizer Inc.',
+    'MRK': 'Merck & Co.', 'UNH': 'UnitedHealth Group', 'CVX': 'Chevron Corp.', 'CAT': 'Caterpillar Inc.',
+    'BA': 'Boeing Co.', 'GE': 'General Electric',
+
+    // Indices
+    '^GSPC': 'S&P 500 Index', '^DJI': 'Dow Jones Industrial', '^IXIC': 'NASDAQ Composite',
+    '^RUT': 'Russell 2000', '^VIX': 'Volatility Index (VIX)', '^FTSE': 'FTSE 100 Index',
+    '^GDAXI': 'DAX 40 Index', '^FCHI': 'CAC 40 Index', '^N225': 'Nikkei 225', '^HSI': 'Hang Seng Index',
+
+    // Commodities
+    'GC=F': 'Gold Futures (XAU)', 'SI=F': 'Silver Futures (XAG)', 'CL=F': 'Crude Oil (WTI)',
+    'BZ=F': 'Brent Crude Oil', 'NG=F': 'Natural Gas', 'HG=F': 'Copper Futures',
+    'PL=F': 'Platinum Futures', 'PA=F': 'Palladium Futures', 'ZC=F': 'Corn Futures', 'ZW=F': 'Wheat Futures'
+  };
+
   // --- Default Configuration ---
   const defaultState = {
     symbol: 'BTCUSDT',
@@ -117,11 +176,13 @@
     symbolPickerWrapper: document.getElementById('symbolPickerWrapper'),
     btnOpenSymbolPicker: document.getElementById('btnOpenSymbolPicker'),
     activeSymbolText: document.getElementById('activeSymbolText'),
-    symbolDropdownPanel: document.getElementById('symbolDropdownPanel'),
+    symbolModalOverlay: document.getElementById('symbolModalOverlay'),
+    btnCloseSymbolModal: document.getElementById('btnCloseSymbolModal'),
     symbolSearchInput: document.getElementById('symbolSearchInput'),
     symbolsCountBadge: document.getElementById('symbolsCountBadge'),
     symbolListContainer: document.getElementById('symbolListContainer'),
     quickFilterTags: document.querySelectorAll('.quick-filter-tags .tag-btn'),
+    cryptoSortControls: document.getElementById('cryptoSortControls'),
     btnSortVol: document.getElementById('btnSortVol'),
     btnSortChg: document.getElementById('btnSortChg'),
 
@@ -131,10 +192,10 @@
     tkVol: document.getElementById('tkVol'),
 
     liveTimeframe: document.getElementById('liveTimeframe'),
+    timeframeBox: document.getElementById('timeframeBox'),
     liveLimit: document.getElementById('liveLimit'),
     btnFetchLive: document.getElementById('btnFetchLive'),
     btnToggleMeasure: document.getElementById('btnToggleMeasure'),
-    toggleLiveStream: document.getElementById('toggleLiveStream'),
     csvFileInput: document.getElementById('csvFileInput'),
     statusBadge: document.getElementById('statusBadge'),
     statusText: document.getElementById('statusText'),
@@ -206,8 +267,6 @@
   let ctx = null;
   let resizeObserver = null;
   let renderScheduled = false;
-  let liveWs = null;
-  let lastWsThrottle = 0;
   let isDropdownOpen = false;
 
   // --- Measurement Tool State (Shift + Click Measure) ---
@@ -222,15 +281,18 @@
 
   // --- Initialize App ---
   function init() {
+    cleanLegacyLocalStorage();
+    getIDB();
     loadSettingsFromLocalStorage();
+    syncTimeframeSelectorForSymbol(state.symbol);
     setupUIEvents();
     initChart();
 
     // 1. Fetch Binance Futures exchangeInfo & 24hr Ticker batch
     initExchangeData();
 
-    // 2. Directly fetch live Binance Futures candles on startup
-    fetchLiveBinance(state.symbol, state.timeframe, state.candleLimit);
+    // 2. Directly fetch candles on startup (IndexedDB Cache + Network)
+    fetchLiveCandles(state.symbol, state.timeframe, state.candleLimit);
   }
 
   // --- Helpers: Formatting Numbers ---
@@ -260,7 +322,76 @@
     await fetch24hTickers();
   }
 
+  function buildYahooMarketList() {
+    const list = [];
+
+    // 1. Forex
+    for (const sym of YAHOO_MARKETS.forex) {
+      list.push({
+        symbol: sym,
+        name: SYMBOL_NAMES[sym] || sym,
+        baseAsset: sym.replace('=X', ''),
+        category: 'FOREX',
+        isForex: true,
+        isYahoo: true,
+        lastPrice: 0,
+        changePct: 0,
+        quoteVolume: 0
+      });
+    }
+
+    // 2. Stocks
+    for (const sym of YAHOO_MARKETS.stocks) {
+      list.push({
+        symbol: sym,
+        name: SYMBOL_NAMES[sym] || sym,
+        baseAsset: sym,
+        category: 'STOCKS',
+        isStock: true,
+        isYahoo: true,
+        lastPrice: 0,
+        changePct: 0,
+        quoteVolume: 0
+      });
+    }
+
+    // 3. Indices
+    for (const sym of YAHOO_MARKETS.indices) {
+      list.push({
+        symbol: sym,
+        name: SYMBOL_NAMES[sym] || sym,
+        baseAsset: sym.replace('^', ''),
+        category: 'INDICES',
+        isIndex: true,
+        isYahoo: true,
+        lastPrice: 0,
+        changePct: 0,
+        quoteVolume: 0
+      });
+    }
+
+    // 4. Commodities
+    for (const sym of YAHOO_MARKETS.commodities) {
+      list.push({
+        symbol: sym,
+        name: SYMBOL_NAMES[sym] || sym,
+        baseAsset: sym.replace('=F', ''),
+        category: 'COMMODITIES',
+        isCommodity: true,
+        isYahoo: true,
+        lastPrice: 0,
+        changePct: 0,
+        quoteVolume: 0
+      });
+    }
+
+    return list;
+  }
+
   async function fetchExchangeInfo() {
+    const yahooList = buildYahooMarketList();
+    let binanceSymbols = [];
+
     const url = 'https://fapi.binance.com/fapi/v1/exchangeInfo';
     try {
       const res = await fetch(url);
@@ -268,46 +399,46 @@
       const data = await res.json();
 
       if (data && data.symbols && Array.isArray(data.symbols)) {
-        const activeSymbols = data.symbols
+        binanceSymbols = data.symbols
           .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT' && s.contractType === 'PERPETUAL')
           .map(s => ({
             symbol: s.symbol,
+            name: s.symbol,
             baseAsset: s.baseAsset,
             quoteAsset: s.quoteAsset,
-            isHot: HOT_SYMBOLS.has(s.symbol),
-            isMeme: MEME_SYMBOLS.has(s.symbol),
-            isL1: L1_SYMBOLS.has(s.symbol),
+            category: 'CRYPTO',
+            isCrypto: true,
+            isYahoo: false,
             lastPrice: 0,
             changePct: 0,
             quoteVolume: 0
           }));
-
-        state.allSymbols = activeSymbols;
-        el.symbolsCountBadge.textContent = `${activeSymbols.length} Pairs`;
       }
     } catch (err) {
-      console.warn('Failed to fetch exchangeInfo:', err);
-      const fallbackList = Array.from(HOT_SYMBOLS).map(sym => ({
+      console.warn('Failed to fetch Binance exchangeInfo:', err);
+      binanceSymbols = Array.from(HOT_SYMBOLS).map(sym => ({
         symbol: sym,
+        name: sym,
         baseAsset: sym.replace('USDT', ''),
         quoteAsset: 'USDT',
-        isHot: true,
-        isMeme: false,
-        isL1: false,
+        category: 'CRYPTO',
+        isCrypto: true,
+        isYahoo: false,
         lastPrice: 0,
         changePct: 0,
         quoteVolume: 0
       }));
-      state.allSymbols = fallbackList;
-      el.symbolsCountBadge.textContent = `${fallbackList.length} Cached`;
     }
+
+    // Merge Yahoo Markets (Forex, Stocks, Indices, Commodities) + Binance Crypto
+    state.allSymbols = [...yahooList, ...binanceSymbols];
+    el.symbolsCountBadge.textContent = `${state.allSymbols.length} Pairs`;
   }
 
-  // Single Batched 24h Ticker fetch for all 700+ symbols (Throttled by 60s TTL)
+  // Single Batched 24h Ticker fetch for all symbols (Throttled by 60s TTL)
   async function fetch24hTickers(force = false) {
     const now = Date.now();
     if (!force && now - state.lastTickerFetchTime < TICKER_CACHE_TTL && state.tickerMap.size > 0) {
-      // Use cached data
       applyTickersToSymbols();
       return;
     }
@@ -319,7 +450,6 @@
       const data = await res.json();
 
       if (Array.isArray(data)) {
-        state.tickerMap.clear();
         for (let i = 0; i < data.length; i++) {
           const item = data[i];
           state.tickerMap.set(item.symbol, {
@@ -347,7 +477,6 @@
       }
     }
 
-    // Sort symbols based on active sort mode
     sortSymbols();
     renderSymbolList();
     updateHeaderTickerDisplay();
@@ -355,9 +484,9 @@
 
   function sortSymbols() {
     if (state.sortBy === 'VOL') {
-      state.allSymbols.sort((a, b) => b.quoteVolume - a.quoteVolume);
+      state.allSymbols.sort((a, b) => (b.quoteVolume || 0) - (a.quoteVolume || 0));
     } else if (state.sortBy === 'CHG') {
-      state.allSymbols.sort((a, b) => b.changePct - a.changePct);
+      state.allSymbols.sort((a, b) => (b.changePct || 0) - (a.changePct || 0));
     }
   }
 
@@ -365,62 +494,83 @@
     const t = state.tickerMap.get(state.symbol);
     if (t) {
       el.tkPrice.textContent = `$${formatSymbolPrice(t.lastPrice)}`;
-      const isUp = t.changePct >= 0;
-      el.tkChg.textContent = `${isUp ? '+' : ''}${t.changePct.toFixed(2)}%`;
+      const isUp = (t.changePct || 0) >= 0;
+      el.tkChg.textContent = `${isUp ? '+' : ''}${t.changePct ? t.changePct.toFixed(2) : '0.00'}%`;
       el.tkChg.className = `tk-val ${isUp ? 'up' : 'down'}`;
-      el.tkVol.textContent = formatUSDVolume(t.quoteVolume);
+      el.tkVol.textContent = t.quoteVolume ? formatUSDVolume(t.quoteVolume) : '';
     }
   }
 
-  // --- Render Filtered Symbol Dropdown List ---
+  // --- Render Filtered Symbol Modal Content ---
   function renderSymbolList() {
     const query = (state.searchQuery || '').trim().toUpperCase();
     const category = state.activeCategory || 'ALL';
 
+    // Show / hide crypto sort controls based on category
+    if (el.cryptoSortControls) {
+      if (category === 'FOREX' || category === 'STOCKS' || category === 'INDICES' || category === 'COMMODITIES') {
+        el.cryptoSortControls.style.display = 'none';
+      } else {
+        el.cryptoSortControls.style.display = 'flex';
+      }
+    }
+
     const filtered = state.allSymbols.filter(item => {
-      if (category === 'HOT' && !item.isHot) return false;
-      if (category === 'MEME' && !item.isMeme) return false;
-      if (category === 'LAYER1' && !item.isL1) return false;
+      if (category === 'FOREX' && item.category !== 'FOREX') return false;
+      if (category === 'STOCKS' && item.category !== 'STOCKS') return false;
+      if (category === 'INDICES' && item.category !== 'INDICES') return false;
+      if (category === 'COMMODITIES' && item.category !== 'COMMODITIES') return false;
+      if (category === 'CRYPTO' && item.category !== 'CRYPTO') return false;
 
       if (query) {
-        return item.symbol.includes(query) || item.baseAsset.includes(query);
+        return item.symbol.toUpperCase().includes(query) ||
+               (item.baseAsset && item.baseAsset.toUpperCase().includes(query)) ||
+               (item.name && item.name.toUpperCase().includes(query));
       }
       return true;
     });
 
+    if (el.symbolsCountBadge) {
+      el.symbolsCountBadge.textContent = `${filtered.length} of ${state.allSymbols.length}`;
+    }
+
     if (filtered.length === 0) {
-      el.symbolListContainer.innerHTML = '<div class="symbol-list-loading">No matching symbols found</div>';
+      el.symbolListContainer.innerHTML = `<div class="symbol-list-loading">No matching instruments found for "${state.searchQuery}"</div>`;
       return;
     }
 
+    const yahooItems = filtered.filter(item => item.isYahoo);
+    const cryptoItems = filtered.filter(item => !item.isYahoo);
+
     let html = '';
-    // Show top 200 matches for ultra high performance
-    const renderCount = Math.min(filtered.length, 200);
 
-    for (let i = 0; i < renderCount; i++) {
-      const item = filtered[i];
-      const isSelected = item.symbol === state.symbol;
-      const isUp = item.changePct >= 0;
-      const chgClass = isUp ? 'up' : 'down';
-      const chgSign = isUp ? '+' : '';
-
-      html += `<div class="symbol-item ${isSelected ? 'selected' : ''}" data-symbol="${item.symbol}">
-        <div class="symbol-left-info">
-          <span class="symbol-name">${item.symbol}</span>
-          <span class="symbol-asset">${item.baseAsset}</span>
-        </div>
-        <div class="symbol-right-info">
-          <span class="symbol-price">$${formatSymbolPrice(item.lastPrice)}</span>
-          <span class="symbol-chg ${chgClass}">${chgSign}${item.changePct.toFixed(2)}%</span>
-          <span class="symbol-vol">${formatUSDVolume(item.quoteVolume)}</span>
-        </div>
-      </div>`;
+    // Case 1: Specific Yahoo Category (FOREX, STOCKS, INDICES, COMMODITIES)
+    if (category !== 'CRYPTO' && category !== 'ALL') {
+      html = renderYahooGridTable(filtered);
+    }
+    // Case 2: CRYPTO only
+    else if (category === 'CRYPTO') {
+      html = renderCryptoTable(cryptoItems);
+    }
+    // Case 3: ALL category (Mixed Global Markets & Crypto Futures)
+    else {
+      if (yahooItems.length > 0 && cryptoItems.length > 0) {
+        html += `<div class="category-section-title">🌍 GLOBAL MARKETS (FOREX • STOCKS • INDICES • COMMODITIES - ${yahooItems.length})</div>`;
+        html += renderYahooGridTable(yahooItems);
+        html += `<div class="category-section-title">⚡ CRYPTO FUTURES (USDT PERPETUAL - ${cryptoItems.length})</div>`;
+        html += renderCryptoTable(cryptoItems.slice(0, 300));
+      } else if (yahooItems.length > 0) {
+        html = renderYahooGridTable(yahooItems);
+      } else {
+        html = renderCryptoTable(cryptoItems);
+      }
     }
 
     el.symbolListContainer.innerHTML = html;
 
-    const items = el.symbolListContainer.querySelectorAll('.symbol-item[data-symbol]');
-    items.forEach(it => {
+    // Attach click listeners to all clickable cards & rows
+    const targets = el.symbolListContainer.querySelectorAll('[data-symbol]');
+    targets.forEach(it => {
       it.addEventListener('click', () => {
         const sym = it.dataset.symbol;
         selectSymbol(sym);
@@ -428,29 +578,139 @@
     });
   }
 
-  function selectSymbol(sym) {
-    if (!sym) return;
-    state.symbol = sym.toUpperCase();
-    el.activeSymbolText.textContent = state.symbol;
-    updateHeaderTickerDisplay();
-    closeSymbolDropdown();
-    saveSettingsToLocalStorage();
-    fetchLiveBinance(state.symbol, state.timeframe, state.candleLimit);
+  function getBadgeClass(cat) {
+    switch (cat) {
+      case 'FOREX': return 'badge-forex';
+      case 'STOCKS': return 'badge-stock';
+      case 'INDICES': return 'badge-index';
+      case 'COMMODITIES': return 'badge-comm';
+      case 'CRYPTO': return 'badge-crypto';
+      default: return 'badge-forex';
+    }
   }
 
-  function openSymbolDropdown() {
+  function renderYahooGridTable(items) {
+    let out = '<div class="symbol-grid-table">';
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const isSelected = item.symbol === state.symbol;
+      const bClass = getBadgeClass(item.category);
+
+      out += `<div class="symbol-grid-card ${isSelected ? 'selected' : ''}" data-symbol="${item.symbol}" title="${item.symbol} - ${item.name}">
+        <div class="card-top">
+          <span class="card-symbol">${item.symbol}</span>
+          <span class="sym-badge ${bClass}">${item.category}</span>
+        </div>
+        <div class="card-name">${item.name || item.baseAsset}</div>
+      </div>`;
+    }
+    out += '</div>';
+    return out;
+  }
+
+  function renderCryptoTable(items) {
+    let out = `
+      <div class="crypto-table-header">
+        <div>Market / Pair</div>
+        <div class="th-right">Last Price</div>
+        <div class="th-right">24h Change</div>
+        <div class="th-right th-vol">24h Volume</div>
+      </div>
+      <div class="crypto-table-list">
+    `;
+
+    const limit = Math.min(items.length, 300);
+    for (let i = 0; i < limit; i++) {
+      const item = items[i];
+      const isSelected = item.symbol === state.symbol;
+      const isUp = (item.changePct || 0) >= 0;
+      const chgClass = isUp ? 'up' : 'down';
+      const chgSign = isUp ? '+' : '';
+
+      out += `
+        <div class="crypto-row ${isSelected ? 'selected' : ''}" data-symbol="${item.symbol}">
+          <div class="sym-info">
+            <span class="sym-title">${item.symbol}</span>
+            <span class="sym-badge badge-crypto">CRYPTO</span>
+            <span class="sym-desc">${item.baseAsset}</span>
+          </div>
+          <div class="td-right sym-price">${item.lastPrice > 0 ? '$' + formatSymbolPrice(item.lastPrice) : '--'}</div>
+          <div class="td-right sym-chg ${chgClass}">${item.changePct ? chgSign + item.changePct.toFixed(2) + '%' : '--'}</div>
+          <div class="td-right sym-vol">${item.quoteVolume > 0 ? formatUSDVolume(item.quoteVolume) : '--'}</div>
+        </div>
+      `;
+    }
+
+    out += '</div>';
+    return out;
+  }
+
+  function isStockOrIndex(symbol) {
+    if (!symbol) return false;
+    const s = symbol.trim().toUpperCase();
+    if (YAHOO_MARKETS.stocks.includes(s) || YAHOO_MARKETS.indices.includes(s)) return true;
+    if (s.startsWith('^')) return true;
+    const found = state.allSymbols.find(item => item.symbol.toUpperCase() === s);
+    if (found && (found.category === 'STOCKS' || found.category === 'INDICES')) return true;
+    return false;
+  }
+
+  function syncTimeframeSelectorForSymbol(symbol) {
+    const fixed1h = isStockOrIndex(symbol);
+    if (fixed1h) {
+      state.timeframe = '1h';
+      if (el.liveTimeframe) {
+        el.liveTimeframe.value = '1h';
+        el.liveTimeframe.disabled = true;
+        el.liveTimeframe.title = 'Timeframe fixed at 1h for Stocks & Indices';
+      }
+      if (el.timeframeBox) {
+        el.timeframeBox.classList.add('is-fixed');
+        el.timeframeBox.title = 'Timeframe fixed at 1h for Stocks & Indices';
+      }
+    } else {
+      if (el.liveTimeframe) {
+        el.liveTimeframe.disabled = false;
+        el.liveTimeframe.title = 'Timeframe';
+        el.liveTimeframe.value = state.timeframe;
+      }
+      if (el.timeframeBox) {
+        el.timeframeBox.classList.remove('is-fixed');
+        el.timeframeBox.title = 'Timeframe';
+      }
+    }
+  }
+
+  function selectSymbol(sym) {
+    if (!sym) return;
+    state.symbol = sym.trim().toUpperCase();
+    el.activeSymbolText.textContent = state.symbol;
+    syncTimeframeSelectorForSymbol(state.symbol);
+    updateHeaderTickerDisplay();
+    closeSymbolModal();
+    saveSettingsToLocalStorage();
+    fetchLiveCandles(state.symbol, state.timeframe, state.candleLimit);
+  }
+
+  function openSymbolModal() {
     isDropdownOpen = true;
-    el.symbolDropdownPanel.classList.add('show');
+    if (el.symbolModalOverlay) {
+      el.symbolModalOverlay.classList.add('show');
+    }
     el.symbolSearchInput.value = '';
     state.searchQuery = '';
     fetch24hTickers(); // Silently refresh 24h ticker if TTL expired
     renderSymbolList();
-    setTimeout(() => el.symbolSearchInput.focus(), 50);
+    setTimeout(() => {
+      if (el.symbolSearchInput) el.symbolSearchInput.focus();
+    }, 60);
   }
 
-  function closeSymbolDropdown() {
+  function closeSymbolModal() {
     isDropdownOpen = false;
-    el.symbolDropdownPanel.classList.remove('show');
+    if (el.symbolModalOverlay) {
+      el.symbolModalOverlay.classList.remove('show');
+    }
   }
 
   // --- Config Modal Controller ---
@@ -523,7 +783,6 @@
 
       el.liveTimeframe.value = state.timeframe;
       el.liveLimit.value = String(state.candleLimit);
-      el.toggleLiveStream.checked = state.enableLiveWs;
 
       // Sync Sidebar UI
       el.toggleFVG.checked = state.fvg.enable;
@@ -695,18 +954,25 @@
       }
     });
 
-    // Open / Toggle Symbol Search Dropdown
+    // Open Symbol Search Modal
     el.btnOpenSymbolPicker.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (isDropdownOpen) closeSymbolDropdown();
-      else openSymbolDropdown();
+      openSymbolModal();
     });
 
-    document.addEventListener('click', (e) => {
-      if (isDropdownOpen && !el.symbolPickerWrapper.contains(e.target)) {
-        closeSymbolDropdown();
-      }
-    });
+    if (el.btnCloseSymbolModal) {
+      el.btnCloseSymbolModal.addEventListener('click', () => {
+        closeSymbolModal();
+      });
+    }
+
+    if (el.symbolModalOverlay) {
+      el.symbolModalOverlay.addEventListener('click', (e) => {
+        if (e.target === el.symbolModalOverlay) {
+          closeSymbolModal();
+        }
+      });
+    }
 
     // Live search filter input
     el.symbolSearchInput.addEventListener('input', (e) => {
@@ -716,7 +982,7 @@
 
     el.symbolSearchInput.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        closeSymbolDropdown();
+        closeSymbolModal();
       } else if (e.key === 'Enter') {
         const query = el.symbolSearchInput.value.trim().toUpperCase();
         if (query) {
@@ -757,33 +1023,26 @@
 
     // Timeframe Selection Trigger
     el.liveTimeframe.addEventListener('change', () => {
+      if (isStockOrIndex(state.symbol)) {
+        el.liveTimeframe.value = '1h';
+        return;
+      }
       state.timeframe = el.liveTimeframe.value;
       saveSettingsToLocalStorage();
-      fetchLiveBinance(state.symbol, state.timeframe, state.candleLimit);
+      fetchLiveCandles(state.symbol, state.timeframe, state.candleLimit);
     });
 
     // Candle Limit Trigger
     el.liveLimit.addEventListener('change', () => {
       state.candleLimit = parseInt(el.liveLimit.value, 10) || 20000;
       saveSettingsToLocalStorage();
-      fetchLiveBinance(state.symbol, state.timeframe, state.candleLimit);
+      fetchLiveCandles(state.symbol, state.timeframe, state.candleLimit);
     });
 
     // Manual Refresh Button (Forces full fresh 20k download)
     el.btnFetchLive.addEventListener('click', () => {
       saveSettingsToLocalStorage();
-      fetchLiveBinance(state.symbol, state.timeframe, state.candleLimit, true);
-    });
-
-    // WebSocket Realtime Toggle
-    el.toggleLiveStream.addEventListener('change', (e) => {
-      state.enableLiveWs = e.target.checked;
-      saveSettingsToLocalStorage();
-      if (state.enableLiveWs) {
-        connectWebSocket(state.symbol, state.timeframe);
-      } else {
-        closeWebSocket();
-      }
+      fetchLiveCandles(state.symbol, state.timeframe, state.candleLimit, true);
     });
 
     // CSV File Upload (optional backup)
@@ -1147,11 +1406,66 @@
     return 15 * 60 * 1000;
   }
 
-  function saveKlinesToLocalStorage(symbol, interval, rows) {
-    if (!rows || rows.length === 0) return;
-    const key = getKlineCacheKey(symbol, interval);
+  // ==========================================================================
+  // IndexedDB Storage Engine (High-Performance 20k+ Candles Cache)
+  // Replaces localStorage to eliminate the ~5MB quota limit completely.
+  // ==========================================================================
+  const IDB_NAME = 'SMC_Chart_DB';
+  const IDB_VERSION = 1;
+  const IDB_STORE_KLINES = 'klines';
+  const IDB_STORE_SETTINGS = 'settings';
+
+  let dbPromise = null;
+
+  function getIDB() {
+    if (!dbPromise) {
+      dbPromise = new Promise((resolve) => {
+        if (typeof window === 'undefined' || !window.indexedDB) {
+          console.warn('IndexedDB not supported in current environment.');
+          resolve(null);
+          return;
+        }
+
+        try {
+          const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+
+          req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(IDB_STORE_KLINES)) {
+              db.createObjectStore(IDB_STORE_KLINES, { keyPath: 'key' });
+            }
+            if (!db.objectStoreNames.contains(IDB_STORE_SETTINGS)) {
+              db.createObjectStore(IDB_STORE_SETTINGS, { keyPath: 'key' });
+            }
+          };
+
+          req.onsuccess = (e) => {
+            resolve(e.target.result);
+          };
+
+          req.onerror = (e) => {
+            console.error('IndexedDB open error:', e.target.error);
+            resolve(null);
+          };
+        } catch (err) {
+          console.error('IndexedDB init error:', err);
+          resolve(null);
+        }
+      });
+    }
+    return dbPromise;
+  }
+
+  // Save up to 20,000+ candles asynchronously into IndexedDB without quota limits
+  async function saveKlinesToStorage(symbol, interval, rows) {
+    if (!rows || rows.length === 0) return false;
+    const key = `${symbol.trim().toUpperCase()}_${interval}`;
+
     try {
-      // Save compact format: [time_seconds, open, high, low, close, volume]
+      const db = await getIDB();
+      if (!db) return false;
+
+      // Compact format: [time_seconds, open, high, low, close, volume]
       const compact = rows.map(r => [
         r.time,
         r.open,
@@ -1160,143 +1474,289 @@
         r.close,
         r.volume
       ]);
-      localStorage.setItem(key, JSON.stringify(compact));
-    } catch (e) {
-      console.warn('LocalStorage quota reached, pruning older symbol kline caches:', e);
-      try {
-        const toDelete = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.startsWith(KLINE_CACHE_PREFIX) && k !== key) {
-            toDelete.push(k);
-          }
-        }
-        for (const k of toDelete) localStorage.removeItem(k);
 
-        const compact = rows.map(r => [r.time, r.open, r.high, r.low, r.close, r.volume]);
-        localStorage.setItem(key, JSON.stringify(compact));
-      } catch (err2) {
-        console.warn('Could not save klines to localStorage after pruning:', err2);
-      }
+      const record = {
+        key: key,
+        symbol: symbol.trim().toUpperCase(),
+        interval: interval,
+        data: compact,
+        count: rows.length,
+        updatedAt: Date.now()
+      };
+
+      return new Promise((resolve) => {
+        try {
+          const tx = db.transaction(IDB_STORE_KLINES, 'readwrite');
+          const store = tx.objectStore(IDB_STORE_KLINES);
+          store.put(record);
+
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = (e) => {
+            console.warn('Failed to save klines to IndexedDB:', e.target.error);
+            resolve(false);
+          };
+        } catch (txErr) {
+          console.warn('IndexedDB transaction error:', txErr);
+          resolve(false);
+        }
+      });
+    } catch (e) {
+      console.warn('saveKlinesToStorage IndexedDB error:', e);
+      return false;
     }
   }
 
-  function loadKlinesFromLocalStorage(symbol, interval) {
-    const key = getKlineCacheKey(symbol, interval);
+  // Load up to 20,000+ candles asynchronously from IndexedDB (< 15ms)
+  async function loadKlinesFromStorage(symbol, interval) {
+    const key = `${symbol.trim().toUpperCase()}_${interval}`;
+
     try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return null;
-      const compact = JSON.parse(raw);
-      if (!Array.isArray(compact) || compact.length === 0) return null;
+      const db = await getIDB();
+      if (!db) return null;
 
-      const rows = compact.map(c => ({
-        open_time: c[0] * 1000,
-        time: c[0],
-        open: c[1],
-        high: c[2],
-        low: c[3],
-        close: c[4],
-        volume: c[5],
-        datetime: new Date(c[0] * 1000).toISOString().replace('T', ' ').slice(0, 19)
-      }));
+      return new Promise((resolve) => {
+        try {
+          const tx = db.transaction(IDB_STORE_KLINES, 'readonly');
+          const store = tx.objectStore(IDB_STORE_KLINES);
+          const req = store.get(key);
 
-      return rows;
+          req.onsuccess = () => {
+            const result = req.result;
+            if (!result || !result.data || !Array.isArray(result.data) || result.data.length === 0) {
+              resolve(null);
+              return;
+            }
+
+            const rows = result.data.map(c => ({
+              open_time: c[0] * 1000,
+              time: c[0],
+              open: c[1],
+              high: c[2],
+              low: c[3],
+              close: c[4],
+              volume: c[5],
+              datetime: new Date(c[0] * 1000).toISOString().replace('T', ' ').slice(0, 19)
+            }));
+
+            resolve(rows);
+          };
+
+          req.onerror = () => {
+            resolve(null);
+          };
+        } catch (txErr) {
+          console.warn('IndexedDB read transaction error:', txErr);
+          resolve(null);
+        }
+      });
     } catch (e) {
-      console.warn('Failed to load klines from localStorage:', e);
+      console.warn('loadKlinesFromStorage IndexedDB error:', e);
       return null;
     }
   }
 
-  // --- Fetch Live Binance Futures Data with 20k Storage Support ---
-  async function fetchLiveBinance(symbol, interval, totalLimit = 20000, forceFullRefresh = false) {
-    state.symbol = symbol;
-    state.timeframe = interval;
-    state.candleLimit = totalLimit;
+  // Prune any legacy smc_klines_ from localStorage to clear quota warnings
+  function cleanLegacyLocalStorage() {
+    try {
+      const toDelete = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('smc_klines_') || k.startsWith(KLINE_CACHE_PREFIX))) {
+          toDelete.push(k);
+        }
+      }
+      for (const k of toDelete) {
+        localStorage.removeItem(k);
+      }
+    } catch (e) {}
+  }
 
-    // 1. Cache-First: Try reading from browser localStorage
-    const cachedRows = !forceFullRefresh ? loadKlinesFromLocalStorage(symbol, interval) : null;
+  // --- Yahoo Finance Helper Functions ---
+  function isYahooSymbol(symbol) {
+    if (!symbol) return false;
+    const s = symbol.trim().toUpperCase();
+    if (s.includes('=X') || s.includes('=F') || s.startsWith('^') || s.includes('.NYB') || s.includes('-')) return true;
+    if (YAHOO_MARKETS.forex.includes(s) || YAHOO_MARKETS.stocks.includes(s) || YAHOO_MARKETS.indices.includes(s) || YAHOO_MARKETS.commodities.includes(s)) return true;
+    if (s.endsWith('USDT')) return false;
+    return true; // Default fallback to Yahoo Finance for other tickers
+  }
+
+  function getYahooInterval(interval) {
+    switch (interval) {
+      case '1m': return '1m';
+      case '3m': return '5m';
+      case '5m': return '5m';
+      case '15m': return '15m';
+      case '30m': return '30m';
+      case '1h': return '1h';
+      case '2h': return '1h';
+      case '4h': return '1h';
+      case '1d': return '1d';
+      default: return '15m';
+    }
+  }
+
+  function getYahooRangeParams(interval) {
+    const yfInterval = getYahooInterval(interval);
+
+    if (yfInterval === '1d') {
+      return 'interval=1d&range=50y';
+    } else if (yfInterval === '1h') {
+      return 'interval=1h&range=730d'; // 730 days (~17,500 hourly bars)
+    } else if (yfInterval === '1m') {
+      return 'interval=1m&range=7d';
+    } else {
+      return `interval=${yfInterval}&range=60d`; // 60 days (Yahoo intraday hard limit: ~5,700 15m bars, ~17,000 5m bars)
+    }
+  }
+
+  // Resilient multi-tier Yahoo Finance JSON fetcher with CORS fallbacks
+  async function fetchYahooJson(url) {
+    const urlsToTry = [
+      url,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+    ];
+
+    for (const target of urlsToTry) {
+      try {
+        const res = await fetch(target);
+        if (!res.ok) continue;
+        const text = await res.text();
+        const data = JSON.parse(text);
+        if (data && data.chart && data.chart.result && Array.isArray(data.chart.result) && data.chart.result.length > 0) {
+          return data;
+        }
+      } catch (err) {
+        // Try next proxy mirror
+      }
+    }
+    throw new Error('Yahoo Finance API request failed across all connection channels.');
+  }
+
+  function parseYahooChartResult(chartResult) {
+    if (!chartResult || !chartResult.timestamp || !chartResult.indicators || !chartResult.indicators.quote) {
+      return [];
+    }
+    const timestamps = chartResult.timestamp;
+    const quote = chartResult.indicators.quote[0];
+    const opens = quote.open || [];
+    const highs = quote.high || [];
+    const lows = quote.low || [];
+    const closes = quote.close || [];
+    const volumes = quote.volume || [];
+
+    const rows = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const t = timestamps[i];
+      const o = opens[i];
+      const h = highs[i];
+      const l = lows[i];
+      const c = closes[i];
+      const v = volumes[i];
+
+      if (t === null || t === undefined || isNaN(t)) continue;
+      if (o === null || h === null || l === null || c === null || isNaN(o) || isNaN(h) || isNaN(l) || isNaN(c)) continue;
+
+      const openTimeMs = t * 1000;
+      rows.push({
+        open_time: openTimeMs,
+        time: t,
+        open: Number(o),
+        high: Number(h),
+        low: Number(l),
+        close: Number(c),
+        volume: Number(v || 0),
+        datetime: new Date(openTimeMs).toISOString().replace('T', ' ').slice(0, 19)
+      });
+    }
+
+    return rows;
+  }
+
+  // --- Unified Static Candle Loader (Binance Crypto + Yahoo Markets) ---
+  async function fetchLiveCandles(symbol, interval, totalLimit = 20000, forceFullRefresh = false) {
+    state.symbol = symbol;
+    if (isStockOrIndex(symbol)) {
+      interval = '1h';
+      state.timeframe = '1h';
+    } else {
+      state.timeframe = interval;
+    }
+    state.candleLimit = totalLimit;
+    syncTimeframeSelectorForSymbol(symbol);
+
+    if (isYahooSymbol(symbol)) {
+      await fetchYahooCandles(symbol, interval, totalLimit, forceFullRefresh);
+    } else {
+      await fetchBinanceCandles(symbol, interval, totalLimit, forceFullRefresh);
+    }
+  }
+
+  // --- Fetch Yahoo Finance Data with 20k IndexedDB Storage Support ---
+  async function fetchYahooCandles(symbol, interval, totalLimit = 20000, forceFullRefresh = false) {
+    // 1. Cache-First: Try reading from IndexedDB
+    const cachedRows = !forceFullRefresh ? await loadKlinesFromStorage(symbol, interval) : null;
 
     if (cachedRows && cachedRows.length > 0) {
-      // Immediately render cached 20,000 candles (< 15ms)
       processRawData(cachedRows, `Cache 💾 (${cachedRows.length.toLocaleString()} candles)`);
-
-      if (state.enableLiveWs) {
-        connectWebSocket(symbol, interval);
-      }
-
-      // Check missing candles since last cached candle
-      const lastCandle = cachedRows[cachedRows.length - 1];
-      const lastCachedMs = lastCandle.open_time || (lastCandle.time * 1000);
-      const tfDuration = getIntervalDurationMs(interval);
-      const missingCount = Math.floor((Date.now() - lastCachedMs) / tfDuration);
-
-      if (missingCount > 0 && missingCount <= 1500) {
-        // Quick background delta update
-        fetchDeltaCandles(symbol, interval, lastCachedMs, cachedRows, totalLimit);
-      } else if (missingCount > 1500) {
-        // Cache is too old, run full fetch
-        fetchFullCandles(symbol, interval, totalLimit);
-      }
       return;
     }
 
-    // 2. No cache in localStorage or force refresh: Fetch full 20,000 candles in chunks
-    await fetchFullCandles(symbol, interval, totalLimit);
-  }
-
-  // Fetch missing delta candles and merge into cached 20k array
-  async function fetchDeltaCandles(symbol, interval, lastCachedMs, cachedRows, totalLimit) {
+    // 2. Fetch full dataset from Yahoo Finance
+    setStatus('loading', `Downloading candles for ${symbol} (${interval}) from Yahoo Finance...`);
     try {
-      const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&startTime=${lastCachedMs}&limit=1500`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const klines = await res.json();
-      if (!klines || !Array.isArray(klines) || klines.length === 0) return;
+      const queryParams = getYahooRangeParams(interval);
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${queryParams}`;
 
-      const deltaRows = klines.map(k => ({
-        open_time: k[0],
-        time: Math.floor(k[0] / 1000),
-        open: parseFloat(k[1]),
-        high: parseFloat(k[2]),
-        low: parseFloat(k[3]),
-        close: parseFloat(k[4]),
-        volume: parseFloat(k[5]),
-        datetime: new Date(k[0]).toISOString().replace('T', ' ').slice(0, 19)
-      }));
+      const json = await fetchYahooJson(url);
+      const result = json.chart.result[0];
+      const rows = parseYahooChartResult(result);
 
-      // Merge and deduplicate
-      const seen = new Set();
-      const merged = [];
-      for (const r of cachedRows) {
-        if (!seen.has(r.open_time)) {
-          seen.add(r.open_time);
-          merged.push(r);
-        }
+      if (!rows || rows.length === 0) {
+        throw new Error(`No candles returned for ${symbol}`);
       }
-      for (const r of deltaRows) {
-        if (!seen.has(r.open_time)) {
-          seen.add(r.open_time);
-          merged.push(r);
-        } else {
-          // Update the existing candle if open
-          const idx = merged.findIndex(m => m.open_time === r.open_time);
-          if (idx !== -1) merged[idx] = r;
-        }
+
+      // Update 24h ticker info from metadata
+      if (result.meta) {
+        const lastPrice = result.meta.regularMarketPrice || rows[rows.length - 1].close;
+        const prevClose = result.meta.chartPreviousClose || result.meta.previousClose || rows[0].open;
+        const chgPct = prevClose ? ((lastPrice - prevClose) / prevClose) * 100 : 0;
+        state.tickerMap.set(symbol, {
+          lastPrice: Number(lastPrice),
+          changePct: Number(chgPct),
+          quoteVolume: Number(result.meta.regularMarketVolume || 0)
+        });
+        updateHeaderTickerDisplay();
       }
-      merged.sort((a, b) => a.open_time - b.open_time);
 
-      // Keep up to totalLimit (e.g. 20,000) candles
-      const finalRows = merged.length > totalLimit ? merged.slice(-totalLimit) : merged;
+      rows.sort((a, b) => a.open_time - b.open_time);
+      const finalRows = rows.length > totalLimit ? rows.slice(-totalLimit) : rows;
 
-      saveKlinesToLocalStorage(symbol, interval, finalRows);
-      processRawData(finalRows, `Cache + Synced 💾 (${finalRows.length.toLocaleString()})`);
-    } catch (e) {
-      console.warn('Delta fetch error:', e);
+      // Save up to 20k to browser IndexedDB
+      await saveKlinesToStorage(symbol, interval, finalRows);
+
+      state.symbol = symbol;
+      state.timeframe = interval;
+      processRawData(finalRows, `Yahoo Finance 🌐 (${finalRows.length.toLocaleString()} candles)`);
+    } catch (err) {
+      console.error('Yahoo fetch error:', err);
+      setStatus('error', `Yahoo Finance error: ${err.message}`);
     }
   }
 
-  // Fetch full dataset (up to 20,000 candles) chunk by chunk from Binance Futures
-  async function fetchFullCandles(symbol, interval, totalLimit = 20000) {
+  // --- Fetch Binance Futures Data with 20k IndexedDB Storage Support ---
+  async function fetchBinanceCandles(symbol, interval, totalLimit = 20000, forceFullRefresh = false) {
+    // 1. Cache-First: Try reading from IndexedDB
+    const cachedRows = !forceFullRefresh ? await loadKlinesFromStorage(symbol, interval) : null;
+
+    if (cachedRows && cachedRows.length > 0) {
+      processRawData(cachedRows, `Cache 💾 (${cachedRows.length.toLocaleString()} candles)`);
+      return;
+    }
+
+    // 2. Fetch full dataset from Binance Futures
     setStatus('loading', `Downloading ${totalLimit.toLocaleString()} candles for ${symbol} (${interval})...`);
     const url = 'https://fapi.binance.com/fapi/v1/klines';
     let allCandles = [];
@@ -1347,64 +1807,15 @@
       }
       uniqueRows.sort((a, b) => a.open_time - b.open_time);
 
-      // Save full 20k to browser localStorage
-      saveKlinesToLocalStorage(symbol, interval, uniqueRows);
+      // Save full 20k to browser IndexedDB
+      await saveKlinesToStorage(symbol, interval, uniqueRows);
 
       state.symbol = symbol;
       state.timeframe = interval;
       processRawData(uniqueRows, `Saved to Storage 💾 (${uniqueRows.length.toLocaleString()} candles)`);
-
-      if (state.enableLiveWs) {
-        connectWebSocket(symbol, interval);
-      }
-
     } catch (err) {
       console.error('Binance fetch error:', err);
       setStatus('error', `Download failed: ${err.message}`);
-    }
-  }
-
-  // --- Binance Futures Real-Time WebSocket Streaming ---
-  function connectWebSocket(symbol, interval) {
-    closeWebSocket();
-
-    const streamName = `${symbol.toLowerCase()}@kline_${interval}`;
-    const wsUrl = `wss://fstream.binance.com/ws/${streamName}`;
-
-    try {
-      liveWs = new WebSocket(wsUrl);
-
-      liveWs.onopen = () => {
-        setStatus('ready', `Live WebSocket: ${symbol} (${interval})`);
-      };
-
-      liveWs.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data && data.e === 'kline' && data.k) {
-            handleLiveKlineUpdate(data.k);
-          }
-        } catch (e) {
-          console.error('WS parse error:', e);
-        }
-      };
-
-      liveWs.onerror = (err) => {
-        console.warn('WS error:', err);
-      };
-
-      liveWs.onclose = () => {};
-    } catch (e) {
-      console.warn('WebSocket init failed:', e);
-    }
-  }
-
-  function closeWebSocket() {
-    if (liveWs) {
-      try {
-        liveWs.close();
-      } catch (e) {}
-      liveWs = null;
     }
   }
 
