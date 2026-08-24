@@ -253,9 +253,8 @@ const ATRBot = (function () {
           if (isNaN(vidyaPrev)) {
             trail1 = src;
             vidyaPrev = src;
-            prevClose = src;
           } else {
-            const change = src - prevClose;
+            const change = src - (isNaN(prevTrail1) ? src : ohlcv[i - 1].close);
             if (change > 0) {
               vidyaBuffer.push({ gain: change, loss: 0 });
             } else if (change < 0) {
@@ -268,17 +267,15 @@ const ATRBot = (function () {
               vidyaBuffer.shift();
             }
 
+            let sumGains = 0, sumLosses = 0;
+            for (let j = 0; j < vidyaBuffer.length; j++) {
+              sumGains += vidyaBuffer[j].gain;
+              sumLosses += vidyaBuffer[j].loss;
+            }
+            const sumTotal = sumGains + sumLosses;
             let cmo = 0;
-            if (vidyaBuffer.length >= cmoLength) {
-              let sumGains = 0, sumLosses = 0;
-              for (let j = 0; j < vidyaBuffer.length; j++) {
-                sumGains += vidyaBuffer[j].gain;
-                sumLosses += vidyaBuffer[j].loss;
-              }
-              const sumTotal = sumGains + sumLosses;
-              if (sumTotal !== 0) {
-                cmo = ((sumGains - sumLosses) / sumTotal) * 100;
-              }
+            if (sumTotal > 0) {
+              cmo = ((sumGains - sumLosses) / sumTotal) * 100;
             }
 
             const emaAlpha = 2.0 / (maLength + 1);

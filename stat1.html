@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>STAT1 • SMC + ATRBot + VSR (Binance Futures & IndexedDB Cache)</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Lightweight Charts Local + CDN Fallback -->
+  <script src="libs/lightweight-charts.standalone.production.js"></script>
+  <script>
+    if (typeof LightweightCharts === 'undefined') {
+      document.write('<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"><\/script>');
+    }
+  </script>
+
+  <!-- Universal JavaScript SMC Library -->
+  <script src="smc.js"></script>
+
+  <style>
+    :root {
+      --bg-main: #090d16;
+      --bg-panel: #111726;
+      --bg-card: #161f33;
+      --border-color: #1e293b;
+      --border-focus: #3b82f6;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-sub: #64748b;
+      --bull: #10b981;
+      --bear: #f43f5e;
+      --fvg-bull: #10b981;
+      --fvg-bear: #f43f5e;
+      --ob-bull: #3b82f6;
+      --ob-bear: #f59e0b;
+      --bos: #06b6d4;
+      --choch: #a855f7;
+      --liq: #d946ef;
+      --atr-vidya: #06b6d4;
+      --atr-stop: #f59e0b;
+      --vsr: #c084fc;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background: var(--bg-main);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Navigation Bar */
+    header.app-header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-color);
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      gap: 12px;
+      z-index: 50;
+      flex-shrink: 0;
+    }
+
+    .header-left, .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 1px;
+      background: linear-gradient(135deg, #0284c7, #6366f1);
+      color: #ffffff;
+      padding: 4px 10px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 0 15px rgba(2, 132, 199, 0.35);
+    }
+
+    /* Searchable Symbol Picker Button */
+    .symbol-picker-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    .symbol-picker-btn:hover {
+      border-color: var(--border-focus);
+      background: #1a253c;
+    }
+    .sym-badge-price {
+      color: #f8fafc;
+      font-weight: 700;
+    }
+    .sym-badge-chg {
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(0, 0, 0, 0.3);
+    }
+
+    .select-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      outline: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .select-pill:hover, .select-pill:focus {
+      border-color: var(--border-focus);
+    }
+
+    .btn-action {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s;
+    }
+    .btn-action:hover {
+      background: #1e293b;
+      color: var(--text-main);
+      border-color: #475569;
+    }
+
+    .cache-status-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid #1e293b;
+      padding: 5px 10px;
+      border-radius: 6px;
+    }
+
+    /* Sub-Toolbar / Indicator Controls */
+    .indicator-toolbar {
+      background: #0d121f;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      overflow-x: auto;
+      white-space: nowrap;
+      flex-shrink: 0;
+      scrollbar-width: none;
+    }
+    .indicator-toolbar::-webkit-scrollbar { display: none; }
+
+    .toggle-chip {
+      background: rgba(30, 41, 59, 0.4);
+      border: 1px solid #1e293b;
+      color: #94a3b8;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .toggle-chip:hover {
+      background: rgba(51, 65, 85, 0.5);
+      color: #f1f5f9;
+    }
+    .toggle-chip.active {
+      background: rgba(2, 132, 199, 0.15);
+      border-color: #0284c7;
+      color: #38bdf8;
+      box-shadow: 0 0 10px rgba(2, 132, 199, 0.2);
+    }
+    .toggle-chip.active.bull {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: #10b981;
+      color: #34d399;
+    }
+    .toggle-chip.active.bear {
+      background: rgba(244, 63, 94, 0.15);
+      border-color: #f43f5e;
+      color: #fb7185;
+    }
+    .toggle-chip.active.purple {
+      background: rgba(168, 85, 247, 0.15);
+      border-color: #a855f7;
+      color: #c084fc;
+    }
+    .toggle-chip.active.pink {
+      background: rgba(217, 70, 239, 0.15);
+      border-color: #d946ef;
+      color: #f0abfc;
+    }
+    .toggle-chip.active.amber {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: #f59e0b;
+      color: #fcd34d;
+    }
+
+    .badge-count {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 10px;
+      color: inherit;
+    }
+
+    /* Main Chart Workspace */
+    .workspace-area {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #chartContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #overlayCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* TradingView-Style Large Background Watermark */
+    .chart-watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      user-select: none;
+      z-index: 1;
+      opacity: 0.05;
+      text-align: center;
+    }
+    .watermark-symbol {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 88px;
+      font-weight: 900;
+      letter-spacing: 6px;
+      color: #ffffff;
+      line-height: 1;
+    }
+    .watermark-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 8px;
+      color: #38bdf8;
+      margin-top: 10px;
+    }
+
+    /* Loading Overlay */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(9, 13, 22, 0.92);
+      backdrop-filter: blur(6px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      z-index: 100;
+      transition: opacity 0.25s ease;
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(56, 189, 248, 0.15);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loading-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .loading-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    /* Symbol Search & Filter Modal */
+    .symbol-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 250;
+    }
+    .symbol-modal-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      width: 600px;
+      max-width: 95vw;
+      height: 640px;
+      max-height: 85vh;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .sym-modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex-shrink: 0;
+      background: #0f1624;
+    }
+    .sym-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sym-search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .sym-search-input {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid #334155;
+      color: #f8fafc;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      padding: 10px 14px 10px 38px;
+      border-radius: 8px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .sym-search-input:focus {
+      border-color: #38bdf8;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    }
+    .search-icon-pos {
+      position: absolute;
+      left: 12px;
+      font-size: 14px;
+      color: #94a3b8;
+      pointer-events: none;
+    }
+
+    /* Filter Tabs & Sort Controls */
+    .sym-filter-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 20px;
+      background: #090d16;
+      border-bottom: 1px solid var(--border-color);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .sym-tabs {
+      display: flex;
+      gap: 6px;
+    }
+    .sym-tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 3px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 11px;
+      transition: all 0.15s;
+    }
+    .sym-tab-btn:hover {
+      color: var(--text-main);
+      background: #1e293b;
+    }
+    .sym-tab-btn.active {
+      background: #0284c7;
+      color: #ffffff;
+    }
+
+    .sym-sort-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .sym-sort-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: var(--text-muted);
+      padding: 3px 7px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .sym-sort-btn:hover {
+      color: #fff;
+    }
+    .sym-sort-btn.active {
+      border-color: #38bdf8;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+    }
+
+    /* Symbol List Rows */
+    .sym-list-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sym-list-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    .sym-list-container::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+
+    .symbol-row-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      background: rgba(22, 31, 51, 0.4);
+      border: 1px solid transparent;
+      transition: all 0.12s ease;
+    }
+    .symbol-row-item:hover {
+      background: #1e293b;
+      border-color: #475569;
+    }
+    .symbol-row-item.selected {
+      background: rgba(2, 132, 199, 0.15);
+      border-color: #0284c7;
+    }
+    .sym-col-left {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .sym-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 13px;
+      color: #f8fafc;
+    }
+    .sym-sub {
+      font-size: 10px;
+      color: #64748b;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .sym-col-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .sym-price {
+      font-weight: 700;
+      font-size: 13px;
+      color: #f8fafc;
+    }
+    .sym-stats {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .sym-chg {
+      font-weight: 700;
+    }
+    .sym-vol {
+      color: #64748b;
+      font-size: 10px;
+    }
+
+    /* TradingView fx Indicators Header Button */
+    .btn-fx-indicators {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid #334155;
+      color: #f8fafc;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .btn-fx-indicators:hover {
+      background: #334155;
+      border-color: #38bdf8;
+      color: #38bdf8;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+    }
+    .fx-icon {
+      font-family: 'Times New Roman', serif;
+      font-style: italic;
+      font-weight: 700;
+      font-size: 14px;
+      color: #38bdf8;
+      line-height: 1;
+    }
+
+    /* TradingView-Style On-Chart Indicator Legend (Top-Left Status Line) */
+    .chart-legend {
+      position: absolute;
+      top: 12px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      z-index: 25;
+      pointer-events: auto;
+      user-select: none;
+    }
+    .legend-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(30, 41, 59, 0.6);
+      padding: 2px 8px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      transition: all 0.15s ease;
+      cursor: default;
+    }
+    .legend-row:hover {
+      background: rgba(15, 23, 42, 0.95);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #f8fafc;
+    }
+    .legend-row.inactive {
+      opacity: 0.45;
+      text-decoration: line-through;
+    }
+    .legend-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .legend-title {
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .legend-params {
+      color: #94a3b8;
+      font-size: 10px;
+    }
+    .legend-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      margin-left: 4px;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+    .legend-row:hover .legend-actions {
+      opacity: 1;
+    }
+    .legend-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      cursor: pointer;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .legend-btn:hover {
+      background: #334155;
+      color: #38bdf8;
+    }
+    .legend-btn.btn-remove:hover {
+      color: #fb7185;
+      background: rgba(244, 63, 94, 0.2);
+    }
+
+    /* Indicators Catalog Modal */
+    .catalog-modal-box {
+      width: 680px;
+      max-width: 92vw;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      max-height: 85vh;
+    }
+    .catalog-search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .catalog-search-input {
+      width: 100%;
+      background: #090d16;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 9px 12px 9px 36px;
+      color: #f8fafc;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .catalog-search-input:focus {
+      border-color: #38bdf8;
+    }
+    .catalog-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+      padding-right: 4px;
+      max-height: 55vh;
+    }
+    .catalog-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .catalog-list::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    .catalog-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: rgba(22, 31, 51, 0.4);
+      border: 1px solid rgba(51, 65, 85, 0.5);
+      border-radius: 8px;
+      transition: all 0.15s ease;
+      cursor: pointer;
+    }
+    .catalog-item:hover {
+      background: #1e293b;
+      border-color: #475569;
+    }
+    .catalog-item.added {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.06);
+    }
+    .catalog-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .catalog-item-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .catalog-item-desc {
+      font-size: 11px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+    .catalog-tag {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #1e293b;
+      color: #38bdf8;
+      border: 1px solid #334155;
+    }
+    .btn-add-ind {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-add-ind:hover {
+      background: #0284c7;
+      border-color: #0284c7;
+      color: #fff;
+    }
+    .catalog-item.added .btn-add-ind {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: #10b981;
+      color: #34d399;
+    }
+
+    /* Modal Backdrop General */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    .modal-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      width: 580px;
+      max-width: 92vw;
+      padding: 22px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #f8fafc;
+    }
+    .btn-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 18px;
+      cursor: pointer;
+    }
+    .btn-close:hover {
+      color: #fff;
+    }
+
+    /* Universal TradingView Indicator Settings Modal Styling */
+    .tv-modal-tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+    }
+    .tv-tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #94a3b8;
+      padding: 7px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tv-tab-btn:hover {
+      color: #f8fafc;
+      background: #1e293b;
+    }
+    .tv-tab-btn.active {
+      background: #0284c7;
+      border-color: #0284c7;
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(2, 132, 199, 0.35);
+    }
+    .tv-tab-panel {
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 55vh;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .tv-tab-panel.active {
+      display: flex;
+    }
+    .tv-tab-panel::-webkit-scrollbar {
+      width: 5px;
+    }
+    .tv-tab-panel::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    .tv-form-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .tv-form-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(30, 41, 59, 0.8);
+      border-radius: 8px;
+      gap: 12px;
+    }
+    .tv-form-row:hover {
+      border-color: #334155;
+      background: rgba(15, 23, 42, 0.9);
+    }
+    .tv-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      flex: 1;
+    }
+    .tv-input-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tv-select, .tv-input-number, .tv-input-text {
+      background: #090d16;
+      border: 1px solid #334155;
+      color: #f8fafc;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+      min-width: 110px;
+    }
+    .tv-select:focus, .tv-input-number:focus, .tv-input-text:focus {
+      border-color: #38bdf8;
+    }
+    .tv-checkbox {
+      width: 18px;
+      height: 18px;
+      accent-color: #0284c7;
+      cursor: pointer;
+    }
+    .tv-color-picker-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tv-color-picker {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 1px solid #334155;
+      width: 32px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      background: none;
+      padding: 0;
+    }
+    .tv-color-picker::-webkit-color-swatch-wrapper {
+      padding: 2px;
+    }
+    .tv-color-picker::-webkit-color-swatch {
+      border: none;
+      border-radius: 4px;
+    }
+
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid #1e293b;
+      padding-top: 14px;
+      margin-top: 4px;
+    }
+    .btn-primary {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover {
+      background: #0369a1;
+    }
+    .btn-secondary {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-secondary:hover {
+      background: #334155;
+      color: #f8fafc;
+    }
+
+    /* Main Chart Layout (Sidebar + Chart) */
+    .main-chart-layout {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      position: relative;
+      width: 100%;
+      height: calc(100vh - 52px);
+      overflow: hidden;
+    }
+
+    /* TradingView-Style Fixed Left Drawing Sidebar */
+    .tv-draw-sidebar {
+      width: 46px;
+      background: #090d16;
+      border-right: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 0;
+      gap: 5px;
+      z-index: 30;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .draw-btn {
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #94a3b8;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      position: relative;
+    }
+    .draw-btn:hover {
+      background: #1e293b;
+      color: #f8fafc;
+      border-color: #334155;
+    }
+    .draw-btn.active {
+      background: #0284c7;
+      color: #ffffff;
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(2, 132, 199, 0.45);
+    }
+    .draw-sep {
+      width: 26px;
+      height: 1px;
+      background: #1e293b;
+      margin: 4px 0;
+    }
+
+    /* Floating Context Toolbar for Selected Drawing */
+    .draw-context-toolbar {
+      position: absolute;
+      z-index: 40;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #38bdf8;
+      border-radius: 6px;
+      padding: 3px 6px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      user-select: none;
+      animation: fadeInTb 0.12s ease;
+    }
+    @keyframes fadeInTb {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .ctx-tb-inner {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ctx-color-input {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      cursor: pointer;
+      background: transparent;
+      padding: 0;
+    }
+    .ctx-color-input::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    .ctx-color-input::-webkit-color-swatch {
+      border: none;
+      border-radius: 3px;
+    }
+    .ctx-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #cbd5e1;
+      font-size: 13px;
+      padding: 2px 6px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .ctx-btn:hover {
+      background: #1e293b;
+      color: #ffffff;
+      border-color: #475569;
+    }
+
+    /* Floating Replay Control Toolbar */
+    .replay-toolbar {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 45;
+      background: rgba(13, 18, 30, 0.95);
+      border: 1px solid #38bdf8;
+      border-radius: 8px;
+      padding: 5px 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(10px);
+      user-select: none;
+      animation: slideDownReplay 0.15s ease;
+    }
+    @keyframes slideDownReplay {
+      from { opacity: 0; transform: translate(-50%, -10px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+    .replay-tb-inner {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .replay-badge {
+      background: linear-gradient(135deg, #0284c7, #6366f1);
+      color: #ffffff;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      letter-spacing: 0.5px;
+    }
+    .replay-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: #cbd5e1;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 8px;
+      cursor: pointer;
+      transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .replay-btn:hover {
+      background: #1e293b;
+      color: #ffffff;
+      border-color: #475569;
+    }
+    .replay-btn.btn-play {
+      background: #0284c7;
+      color: #ffffff;
+      padding: 4px 12px;
+      font-size: 14px;
+    }
+    .replay-btn.btn-play:hover {
+      background: #0369a1;
+    }
+    .replay-btn.btn-play.playing {
+      background: #f59e0b;
+    }
+    .replay-btn.btn-exit:hover {
+      background: rgba(244, 63, 94, 0.2);
+      color: #fb7185;
+      border-color: #f43f5e;
+    }
+    .replay-btn.active {
+      background: rgba(244, 63, 94, 0.2);
+      color: #fb7185;
+      border-color: #f43f5e;
+    }
+    .replay-sep {
+      width: 1px;
+      height: 18px;
+      background: #334155;
+      margin: 0 2px;
+    }
+    .replay-select {
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+    }
+    .replay-progress {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #94a3b8;
+      min-width: 90px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 1. Navigation Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-badge">⚡ STAT1 SMC</div>
+      
+      <!-- Searchable Symbol Picker Button -->
+      <button class="symbol-picker-btn" id="btnOpenSymbolPicker" title="Click to search & filter all Binance Futures symbols">
+        <span>🔍</span>
+        <span id="activeSymbolText">BTCUSDT</span>
+        <span class="sym-badge-price" id="activePriceText">--</span>
+        <span class="sym-badge-chg" id="activeChangeText">--</span>
+        <span style="font-size: 10px; color: #64748b;">▾</span>
+      </button>
+
+      <!-- Timeframe Selector -->
+      <select class="select-pill" id="timeframeSelect" title="Kline Interval">
+        <option value="1m">1m</option>
+        <option value="3m">3m</option>
+        <option value="5m">5m</option>
+        <option value="15m" selected>15m</option>
+        <option value="30m">30m</option>
+        <option value="1h">1h</option>
+        <option value="4h">4h</option>
+        <option value="1d">1d</option>
+      </select>
+
+      <!-- Candle History Limit -->
+      <select class="select-pill" id="limitSelect" title="Candle Limit to Fetch / Cache">
+        <option value="1000">1,000 Bars</option>
+        <option value="3000">3,000 Bars</option>
+        <option value="5000">5,000 Bars</option>
+        <option value="10000" selected>10,000 Bars</option>
+        <option value="20000">20,000 Bars</option>
+      </select>
+    </div>
+
+    <div class="header-right">
+      <!-- Cache Status Badge -->
+      <div class="cache-status-pill" id="cacheBadge">⚡ IndexedDB Initializing...</div>
+
+      <!-- Sync / Force Reload -->
+      <button class="btn-action" id="btnReload" title="Force download fresh candles from Binance API">🔄 Sync</button>
+
+      <!-- Clear Cache -->
+      <button class="btn-action" id="btnClearCache" title="Wipe IndexedDB cached bars">🗑️ Clear DB</button>
+
+      <!-- TradingView-Style Replay Button -->
+      <button class="btn-action" id="btnOpenReplay" style="border-color: #6366f1; color: #a5b4fc;" title="Bar Replay Mode (Cut history & step forward)">⏪ Replay</button>
+
+      <!-- TradingView-Style fx Indicators Button -->
+      <button class="btn-fx-indicators" id="btnOpenIndicatorsCatalog" title="Indicators, Metrics & Strategies">
+        <span class="fx-icon">fx</span>
+        <span>Indicators</span>
+      </button>
+
+      <!-- Navigation to Index & 10k Test -->
+      <a href="index.html" class="btn-action" style="text-decoration: none;" title="Open Main Chart">🏠 Main</a>
+      <a href="smctest.html" class="btn-action" style="text-decoration: none;" title="Open Python 10k SMC Test Chart">📊 10k Test</a>
+
+      <!-- Info Modal -->
+      <button class="btn-action" id="btnOpenInfo" title="System info and metrics">ℹ️ Info</button>
+    </div>
+  </header>
+
+  <!-- 2. Main Layout (TradingView Left Drawing Sidebar + Chart Workspace) -->
+  <div class="main-chart-layout">
+    <!-- TradingView Fixed Left Drawing Sidebar -->
+    <aside class="tv-draw-sidebar" id="drawToolbar">
+      <button class="draw-btn active" id="btnToolCursor" data-tool="cursor" title="Cursor / Select (Drag drawings)">↖</button>
+      <div class="draw-sep"></div>
+      <button class="draw-btn" id="btnToolTrendline" data-tool="trendline" title="Trend Line (Click 2 points)">📏</button>
+      <button class="draw-btn" id="btnToolRectangle" data-tool="rectangle" title="Rectangle Box / Zone (Click 2 corners)">▭</button>
+      <div class="draw-sep"></div>
+      <button class="draw-btn" id="btnToolLong" data-tool="long_position" title="Long Position / Entry Long (Click entry)">📈</button>
+      <button class="draw-btn" id="btnToolShort" data-tool="short_position" title="Short Position / Entry Short (Click entry)">📉</button>
+      <div class="draw-sep"></div>
+      <button class="draw-btn" id="btnDeleteDrawing" title="Delete Selected Drawing (Del)">🗑️</button>
+      <button class="draw-btn" id="btnClearAllDrawings" title="Clear All Drawings">✕</button>
+    </aside>
+
+    <!-- Workspace Area: Chart & Canvas Overlay -->
+    <div class="workspace-area">
+      <!-- TradingView-Style Large Background Watermark -->
+      <div class="chart-watermark" id="chartWatermark">
+        <div class="watermark-symbol" id="watermarkSymbol">BTCUSDT</div>
+        <div class="watermark-sub" id="watermarkSub">15M · BINANCE FUTURES</div>
+      </div>
+
+      <!-- TradingView-Style On-Chart Indicator Legend (Status Line with 👁️ ⚙️ ✕) -->
+      <div class="chart-legend" id="chartLegend">
+        <!-- Injected dynamically via stat1.js -->
+      </div>
+
+      <div id="chartContainer"></div>
+      <canvas id="overlayCanvas"></canvas>
+
+      <!-- Loading Screen -->
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-title" id="loadingText">Loading BTCUSDT 15m...</div>
+        <div class="loading-sub" id="loadingSubtext">Checking IndexedDB Cache</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Indicators Catalog Modal (TradingView-Style fx Dialog) -->
+  <div class="modal-backdrop" id="indicatorsCatalogModal">
+    <div class="catalog-modal-box">
+      <div class="modal-title">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="fx-icon" style="font-size: 20px;">fx</span>
+          <span>Indicators & Strategies</span>
+        </div>
+        <button class="btn-close" id="btnCloseCatalogModal">✕</button>
+      </div>
+
+      <!-- Search Box -->
+      <div class="catalog-search-box">
+        <span style="position: absolute; left: 12px; color: #64748b; font-size: 13px;">🔍</span>
+        <input type="text" id="catalogSearchInput" class="catalog-search-input" placeholder="Search indicators (e.g. SMC, ATRBot, VSR, EMA, VWAP)..." autocomplete="off">
+      </div>
+
+      <!-- Indicator Catalog List -->
+      <div class="catalog-list" id="catalogListContainer">
+        <!-- Rendered dynamically via stat1.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Universal TradingView-Style Indicator Settings Modal -->
+  <div class="modal-backdrop" id="indicatorSettingsModal">
+    <div class="modal-box" style="width: 520px;">
+      <!-- Modal Header -->
+      <div class="modal-title">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">⚙️</span>
+          <span id="indModalTitle">Indicator Settings</span>
+        </div>
+        <button class="btn-close" id="btnCloseIndSettingsModal">✕</button>
+      </div>
+
+      <!-- Dynamic Settings Container (Rendered dynamically by IndicatorRegistry) -->
+      <div id="indicatorSettingsModalBody"></div>
+
+      <!-- Modal Action Footer -->
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btnResetIndSettings">Reset Defaults</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-secondary" id="btnCancelIndSettings">Cancel</button>
+          <button class="btn-primary" id="btnApplyIndSettings">Apply / OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Symbol Search & Filter Modal -->
+  <div class="symbol-modal-backdrop" id="symbolModal">
+    <div class="symbol-modal-box">
+      <!-- Modal Header -->
+      <div class="sym-modal-header">
+        <div class="sym-header-top">
+          <div style="font-weight: 700; font-size: 15px; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+            <span>🪙 Binance Futures Markets</span>
+            <span class="badge-count" id="symbolCountBadge" style="background: #1e293b; color: #38bdf8; font-size: 11px;">0 pairs</span>
+          </div>
+          <button class="btn-close" id="btnCloseSymbolModal">✕</button>
+        </div>
+        <div class="sym-search-box">
+          <span class="search-icon-pos">🔍</span>
+          <input type="text" id="symbolSearchInput" class="sym-search-input" placeholder="Search symbol or coin e.g. BTC, ETH, SOL, PEPE..." autocomplete="off">
+        </div>
+      </div>
+
+      <!-- Filter Tabs & Sort Controls -->
+      <div class="sym-filter-bar">
+        <div class="sym-tabs">
+          <button class="sym-tab-btn active" id="tabFilterAll">All</button>
+          <button class="sym-tab-btn" id="tabFilterTop">Top 50 Vol</button>
+          <button class="sym-tab-btn" id="tabFilterGainers">🚀 Gainers</button>
+          <button class="sym-tab-btn" id="tabFilterLosers">📉 Losers</button>
+        </div>
+        <div class="sym-sort-group">
+          <button class="sym-sort-btn active" id="sortVolumeBtn" title="Sort by 24h Turnover">Vol ↓</button>
+          <button class="sym-sort-btn" id="sortChangeBtn" title="Sort by 24h Change %">Chg%</button>
+          <button class="sym-sort-btn" id="sortPriceBtn" title="Sort by Price">Price</button>
+          <button class="sym-sort-btn" id="sortNameBtn" title="Sort Alphabetically">A-Z</button>
+        </div>
+      </div>
+
+      <!-- Scrollable Symbols List -->
+      <div class="sym-list-container" id="symbolListContainer">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. System Info Modal -->
+  <div class="modal-backdrop" id="infoModal">
+    <div class="modal-box">
+      <div class="modal-title">
+        <span>⚡ STAT1 Engine Information</span>
+        <button class="btn-close" id="btnCloseModal">✕</button>
+      </div>
+      <div style="font-size: 13px; line-height: 1.6; color: #cbd5e1;">
+        <p>• <b>TradingView-Style Indicator Legend & Settings</b>: Tùy chỉnh thông số (Inputs) và giao diện (Style, Line, Fill, Colors) trực tiếp trên Chart, lưu vĩnh viễn vào IndexedDB.</p>
+        <p style="margin-top: 8px;">• <b>Modular Indicator System</b>: Mỗi indicator là 1 file riêng biệt (<code>indicators/</code>) với schema Inputs & Style chuẩn TradingView.</p>
+        <p style="margin-top: 8px;">• <b>Dynamic Binance exchangeInfo & 24hr Tickers</b>: Tải 1 lần danh sách đầy đủ tất cả các cặp giao dịch Futures kèm Volume 24h, Last Price, và % thay đổi giá, sau đó tự động lưu vào IndexedDB.</p>
+        <p style="margin-top: 8px;">• <b>Pure Client-Side SMC</b>: Toàn bộ 15 chỉ báo SMC + ATRBot + VSR + EMA + VWAP được tính toán 100% bằng JavaScript với <code>smc.js</code>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modular Indicators Suite -->
+  <script src="indicators/registry.js"></script>
+  <script src="indicators/indicator_atrbot.js"></script>
+  <script src="indicators/indicator_smc.js"></script>
+  <script src="indicators/indicator_vsr.js"></script>
+  <script src="indicators/indicator_ema.js"></script>
+  <script src="indicators/indicator_vwap.js"></script>
+  <script src="indicators/drawtools.js"></script>
+  <script src="indicators/replay.js"></script>
+
+  <!-- STAT1 Engine Application Script -->
+  <script src="stat1.js"></script>
+</body>
+</html>

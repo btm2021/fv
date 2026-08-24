@@ -1,0 +1,24 @@
+{
+  "name": "smartmoneyconcepts-js",
+  "version": "0.0.27",
+  "description": "Smart Money Concepts (SMC) Indicator Library - Pure JavaScript & Node.js 1:1 Port of joshyattridge/smart-money-concepts",
+  "main": "smc.js",
+  "scripts": {
+    "test": "node test_smc_node.js",
+    "example": "node example_usage.js"
+  },
+  "keywords": [
+    "smart-money-concepts",
+    "smc",
+    "trading",
+    "indicators",
+    "fair-value-gap",
+    "order-blocks",
+    "liquidity",
+    "bos",
+    "choch",
+    "ict"
+  ],
+  "author": "Joshua Attridge (Original Python) / Ported to JS",
+  "license": "MIT"
+}

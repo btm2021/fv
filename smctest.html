@@ -1,0 +1,1617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SMC & ATR Bot Test Chart • 10k BTCUSDT 15m (Python Engine)</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Lightweight Charts Local + CDN Fallback -->
+  <script src="libs/lightweight-charts.standalone.production.js"></script>
+  <script>
+    if (typeof LightweightCharts === 'undefined') {
+      document.write('<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"><\/script>');
+    }
+  </script>
+
+  <!-- Preloaded Data generated directly from Python smartmoneyconcepts + atrbot -->
+  <script src="smc_data.js"></script>
+  <!-- Universal JavaScript SMC Library -->
+  <script src="smc.js"></script>
+
+  <style>
+    :root {
+      --bg-main: #090d16;
+      --bg-panel: #111726;
+      --bg-card: #161f33;
+      --border-color: #1e293b;
+      --border-focus: #3b82f6;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --bullish: #10b981;
+      --bearish: #f43f5e;
+      --accent-blue: #38bdf8;
+      --accent-purple: #a855f7;
+      --accent-amber: #f59e0b;
+      --accent-cyan: #06b6d4;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- App Header --- */
+    .app-header {
+      height: 52px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      z-index: 100;
+      gap: 12px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: nowrap;
+    }
+
+    .brand-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      color: #fff;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      padding: 5px 10px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+      letter-spacing: 0.5px;
+    }
+
+    .symbol-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .symbol-title {
+      font-weight: 700;
+      font-size: 15px;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .tf-badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .source-badge {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.3);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .source-badge:hover {
+      background: rgba(168, 85, 247, 0.25);
+      border-color: rgba(168, 85, 247, 0.5);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stat-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stat-pill b {
+      color: #fff;
+    }
+
+    /* --- Toolbar --- */
+    .toolbar {
+      height: 44px;
+      background: #0d1322;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      overflow-x: auto;
+      white-space: nowrap;
+      gap: 8px;
+      z-index: 90;
+    }
+
+    .toggle-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toggle-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 5px 10px;
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    .toggle-btn:hover {
+      border-color: var(--border-focus);
+      color: var(--text-main);
+    }
+
+    .toggle-btn.active {
+      background: rgba(59, 130, 246, 0.15);
+      border-color: #3b82f6;
+      color: #60a5fa;
+    }
+
+    /* Custom Indicator Button Colors */
+    .toggle-btn.atr-btn.active {
+      background: rgba(6, 182, 212, 0.18);
+      border-color: #06b6d4;
+      color: #22d3ee;
+      box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+    }
+
+    .toggle-btn.fvg-btn.active {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: #10b981;
+      color: #34d399;
+    }
+
+    .toggle-btn.ob-btn.active {
+      background: rgba(168, 85, 247, 0.15);
+      border-color: #a855f7;
+      color: #c084fc;
+    }
+
+    .toggle-btn.bos-btn.active {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: #f59e0b;
+      color: #fbbf24;
+    }
+
+    .toggle-btn.swings-btn.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: #38bdf8;
+      color: #7dd3fc;
+    }
+
+    .toggle-btn.liq-btn.active {
+      background: rgba(236, 72, 153, 0.15);
+      border-color: #ec4899;
+      color: #f472b6;
+    }
+
+    .count-tag {
+      background: rgba(0, 0, 0, 0.35);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border-color);
+      margin: 0 4px;
+    }
+
+    .action-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 5px 9px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      transition: all 0.15s ease;
+    }
+
+    .action-btn:hover {
+      background: #1e293b;
+      color: #fff;
+      border-color: #475569;
+    }
+
+    /* --- Chart Container Area --- */
+    .main-wrapper {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      height: calc(100vh - 96px);
+      overflow: hidden;
+    }
+
+    #chartContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+    }
+
+    #overlayCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    /* --- Floating OHLCV, ATRBot & SMC HUD Info --- */
+    .chart-hud {
+      position: absolute;
+      top: 10px;
+      left: 14px;
+      z-index: 30;
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    .hud-row-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hud-val b {
+      color: var(--text-dim);
+      font-weight: 500;
+      margin-right: 3px;
+    }
+
+    .hud-val span {
+      color: var(--text-main);
+      font-weight: 600;
+    }
+
+    .hud-row-atr {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #94a3b8;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 4px;
+    }
+
+    .hud-smc-tags {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 2px;
+      flex-wrap: wrap;
+    }
+
+    .hud-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      text-transform: uppercase;
+    }
+
+    .badge-atr-buy { background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid #10b981; }
+    .badge-atr-sell { background: rgba(244, 63, 94, 0.25); color: #fb7185; border: 1px solid #f43f5e; }
+    .badge-fvg-bull { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+    .badge-fvg-bear { background: rgba(244, 63, 94, 0.2); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.4); }
+    .badge-ob-bull { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .badge-ob-bear { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-bos { background: rgba(6, 182, 212, 0.2); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.4); }
+    .badge-choch { background: rgba(236, 72, 153, 0.2); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.4); }
+
+    /* --- Loading Screen --- */
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg-main);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      transition: opacity 0.3s ease;
+    }
+
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(59, 130, 246, 0.15);
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .loading-subtext {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 500;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      width: 100%;
+      max-width: 650px;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-close-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .modal-close-btn:hover { color: #fff; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .summary-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 12px;
+      border-radius: 6px;
+    }
+
+    .summary-card h4 {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .summary-card .val {
+      font-size: 20px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .code-box {
+      background: #060911;
+      border: 1px solid #1e293b;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #93c5fd;
+      margin-top: 14px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-badge">SMC & ATR BOT</div>
+      <div class="symbol-info">
+        <span class="symbol-title">BTCUSDT.P</span>
+        <span class="tf-badge">15M FUTURES</span>
+      </div>
+      <a class="source-badge" href="https://github.com/joshyattridge/smart-money-concepts" target="_blank" title="View official Python repository">
+        <span>⭐ smartmoneyconcepts</span>
+      </a>
+    </div>
+
+    <div class="header-right">
+      <div class="stat-pill" title="Total processed bars in dataset">
+        <span>Candles:</span> <b id="totalCandlesCount">10,000</b>
+      </div>
+      <div class="stat-pill" title="Current or Last Candle Price">
+        <span>Price:</span> <b id="lastPriceVal">--</b>
+      </div>
+      <button class="action-btn" id="btnOpenInfo" title="Inspect SMC & ATRBot Engine Metrics">
+        <span>ℹ️ Details</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Indicators & Viewport Control Toolbar -->
+  <div class="toolbar">
+    <div class="toggle-group">
+      <!-- ATRBot Main Toggle -->
+      <button class="toggle-btn atr-btn active" id="toggleATRBot" title="Toggle ATR Bot (VIDYA 14, Period 21, Multiplier 2.0)">
+        <span>🤖 ATR Bot (VIDYA 14/21/2)</span>
+      </button>
+
+      <!-- ATRBot Ribbon Toggle -->
+      <button class="toggle-btn active" id="toggleATRRibbon" title="Toggle ATR Cloud Ribbon Fill">
+        <span>Ribbon</span>
+      </button>
+
+      <!-- ATRBot Signals Toggle -->
+      <button class="toggle-btn active" id="toggleATRSignals" title="Toggle Buy/Sell Signals">
+        <span>Signals</span>
+      </button>
+
+      <div class="divider"></div>
+
+      <!-- FVG Toggle -->
+      <button class="toggle-btn fvg-btn active" id="toggleFVG" title="Toggle Fair Value Gaps">
+        <span>⚡ FVG</span>
+        <span class="count-tag" id="countFVG">0</span>
+      </button>
+
+      <!-- FVG Unmitigated Only Filter -->
+      <button class="toggle-btn" id="toggleFVGUnmitigated" title="Show Only Unmitigated (Open) FVGs">
+        <span>Unmitigated</span>
+      </button>
+
+      <!-- Order Blocks Toggle -->
+      <button class="toggle-btn ob-btn active" id="toggleOB" title="Toggle Order Blocks">
+        <span>🛡️ OB</span>
+        <span class="count-tag" id="countOB">0</span>
+      </button>
+
+      <!-- BOS / CHoCH Toggle -->
+      <button class="toggle-btn bos-btn active" id="toggleBOS" title="Toggle Break of Structure & CHoCH">
+        <span>🔄 BOS</span>
+        <span class="count-tag" id="countBOS">0</span>
+      </button>
+
+      <!-- Swings Toggle -->
+      <button class="toggle-btn swings-btn active" id="toggleSwings" title="Toggle Swing Highs & Lows">
+        <span>📍 Swings</span>
+        <span class="count-tag" id="countSwings">0</span>
+      </button>
+
+      <!-- Liquidity Toggle -->
+      <button class="toggle-btn liq-btn active" id="toggleLiquidity" title="Toggle Buyside/Sellside Liquidity">
+        <span>💧 Liquidity</span>
+        <span class="count-tag" id="countLiq">0</span>
+      </button>
+    </div>
+
+    <div class="toggle-group">
+      <div class="divider"></div>
+      <button class="action-btn" id="btnZoom100" title="Zoom to last 100 candles">100b</button>
+      <button class="action-btn" id="btnZoom300" title="Zoom to last 300 candles">300b</button>
+      <button class="action-btn" id="btnZoom1000" title="Zoom to last 1000 candles">1k</button>
+      <button class="action-btn" id="btnFitAll" title="Fit all 10,000 candles on chart">Fit 10k</button>
+      <button class="action-btn" id="btnLatest" title="Scroll to latest realtime candle">⏩ Latest</button>
+    </div>
+  </div>
+
+  <!-- Main Chart Canvas Area -->
+  <div class="main-wrapper">
+    <div id="chartContainer"></div>
+    <canvas id="overlayCanvas"></canvas>
+
+    <!-- Floating HUD Details -->
+    <div class="chart-hud" id="chartHud">
+      <div class="hud-row-main">
+        <div class="hud-val"><b>T:</b> <span id="hudTime">--</span></div>
+        <div class="hud-val"><b>O:</b> <span id="hudOpen">--</span></div>
+        <div class="hud-val"><b>H:</b> <span id="hudHigh">--</span></div>
+        <div class="hud-val"><b>L:</b> <span id="hudLow">--</span></div>
+        <div class="hud-val"><b>C:</b> <span id="hudClose">--</span></div>
+        <div class="hud-val"><b>V:</b> <span id="hudVol">--</span></div>
+      </div>
+      <div class="hud-row-atr" id="hudAtrRow">
+        <div class="hud-val"><b>VIDYA T1:</b> <span id="hudTrail1" style="color: #22d3ee;">--</span></div>
+        <div class="hud-val"><b>Trail T2:</b> <span id="hudTrail2" style="color: #fbbf24;">--</span></div>
+        <div class="hud-val"><b>ATR:</b> <span id="hudAtrVal">--</span></div>
+        <div class="hud-val"><b>Trend:</b> <span id="hudTrendVal">--</span></div>
+      </div>
+      <div class="hud-smc-tags" id="hudSmcTags"></div>
+    </div>
+  </div>
+
+  <!-- Loading State -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading 10,000 BTCUSDT 15m Candles & Indicator Data...</div>
+    <div class="loading-subtext">Executing Python smartmoneyconcepts & ATRBot (VIDYA 14/21/2)</div>
+  </div>
+
+  <!-- Info Modal -->
+  <div class="modal-backdrop" id="infoModal">
+    <div class="modal-box">
+      <div class="modal-title">
+        <span>SMC & ATRBot Python Engine Details</span>
+        <button class="modal-close-btn" id="btnCloseModal">&times;</button>
+      </div>
+      <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+        Dataset: <b>10,000 candles BTCUSDT (15m Futures)</b>.<br>
+        Indicators calculated via Python backend:
+        <br>• <b>Smart Money Concepts</b>: <code>smartmoneyconcepts</code> (FVG, OB, Swings, BOS/CHOCH, Liquidity)
+        <br>• <b>ATR Bot</b>: <code>atrbot.py</code> (VIDYA CMO=14, Period=21, Multiplier=2.0, ATR=14)
+      </p>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <h4>ATR Bot Signals</h4>
+          <div class="val" style="color: #22d3ee;" id="mATRSignals">0</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;" id="mATRBreakdown">--</div>
+        </div>
+
+        <div class="summary-card">
+          <h4>Fair Value Gaps (FVG)</h4>
+          <div class="val" style="color: #34d399;" id="mTotalFVG">0</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;" id="mUnmitFVG">0 Open</div>
+        </div>
+
+        <div class="summary-card">
+          <h4>Order Blocks (OB)</h4>
+          <div class="val" style="color: #a855f7;" id="mTotalOB">0</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;" id="mUnmitOB">0 Open</div>
+        </div>
+
+        <div class="summary-card">
+          <h4>BOS & CHoCH Breakouts</h4>
+          <div class="val" style="color: #f59e0b;" id="mTotalBOS">0</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;" id="mBOSBreakdown">--</div>
+        </div>
+      </div>
+
+      <div class="code-box">
+        # Python Execution Command:<br>
+        python generate_smc_data.py
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // --- App State ---
+      const state = {
+        data: null,
+        candles: [],
+        volume: [],
+        fvg: [],
+        ob: [],
+        swings: [],
+        bosChoch: [],
+        liquidity: [],
+        atrbot: [],
+        showATRBot: true,
+        showATRRibbon: true,
+        showATRSignals: true,
+        showFVG: true,
+        fvgUnmitigatedOnly: false,
+        showOB: true,
+        showBOS: true,
+        showSwings: true,
+        showLiquidity: true,
+        chart: null,
+        candleSeries: null,
+        volumeSeries: null,
+        ctx: null,
+        renderScheduled: false
+      };
+
+      // --- DOM Elements ---
+      const el = {
+        chartContainer: document.getElementById('chartContainer'),
+        overlayCanvas: document.getElementById('overlayCanvas'),
+        loadingOverlay: document.getElementById('loadingOverlay'),
+        totalCandlesCount: document.getElementById('totalCandlesCount'),
+        lastPriceVal: document.getElementById('lastPriceVal'),
+        countFVG: document.getElementById('countFVG'),
+        countOB: document.getElementById('countOB'),
+        countBOS: document.getElementById('countBOS'),
+        countSwings: document.getElementById('countSwings'),
+        countLiq: document.getElementById('countLiq'),
+        toggleATRBot: document.getElementById('toggleATRBot'),
+        toggleATRRibbon: document.getElementById('toggleATRRibbon'),
+        toggleATRSignals: document.getElementById('toggleATRSignals'),
+        toggleFVG: document.getElementById('toggleFVG'),
+        toggleFVGUnmitigated: document.getElementById('toggleFVGUnmitigated'),
+        toggleOB: document.getElementById('toggleOB'),
+        toggleBOS: document.getElementById('toggleBOS'),
+        toggleSwings: document.getElementById('toggleSwings'),
+        toggleLiquidity: document.getElementById('toggleLiquidity'),
+        btnZoom100: document.getElementById('btnZoom100'),
+        btnZoom300: document.getElementById('btnZoom300'),
+        btnZoom1000: document.getElementById('btnZoom1000'),
+        btnFitAll: document.getElementById('btnFitAll'),
+        btnLatest: document.getElementById('btnLatest'),
+        btnOpenInfo: document.getElementById('btnOpenInfo'),
+        btnCloseModal: document.getElementById('btnCloseModal'),
+        infoModal: document.getElementById('infoModal'),
+        hudTime: document.getElementById('hudTime'),
+        hudOpen: document.getElementById('hudOpen'),
+        hudHigh: document.getElementById('hudHigh'),
+        hudLow: document.getElementById('hudLow'),
+        hudClose: document.getElementById('hudClose'),
+        hudVol: document.getElementById('hudVol'),
+        hudTrail1: document.getElementById('hudTrail1'),
+        hudTrail2: document.getElementById('hudTrail2'),
+        hudAtrVal: document.getElementById('hudAtrVal'),
+        hudTrendVal: document.getElementById('hudTrendVal'),
+        hudSmcTags: document.getElementById('hudSmcTags'),
+        mATRSignals: document.getElementById('mATRSignals'),
+        mATRBreakdown: document.getElementById('mATRBreakdown'),
+        mTotalFVG: document.getElementById('mTotalFVG'),
+        mUnmitFVG: document.getElementById('mUnmitFVG'),
+        mTotalOB: document.getElementById('mTotalOB'),
+        mUnmitOB: document.getElementById('mUnmitOB'),
+        mTotalBOS: document.getElementById('mTotalBOS'),
+        mBOSBreakdown: document.getElementById('mBOSBreakdown')
+      };
+
+      // --- Initialization ---
+      window.addEventListener('DOMContentLoaded', async () => {
+        initChart();
+        setupEventListeners();
+        await loadData();
+      });
+
+      // --- Initialize Lightweight Charts ---
+      function initChart() {
+        state.chart = LightweightCharts.createChart(el.chartContainer, {
+          width: el.chartContainer.clientWidth,
+          height: el.chartContainer.clientHeight,
+          layout: {
+            background: { type: 'solid', color: '#090d16' },
+            textColor: '#94a3b8',
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11
+          },
+          grid: {
+            vertLines: { color: 'rgba(30, 41, 59, 0.45)', style: 1 },
+            horzLines: { color: 'rgba(30, 41, 59, 0.45)', style: 1 }
+          },
+          crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: {
+              color: '#38bdf8',
+              width: 1,
+              style: 3,
+              labelBackgroundColor: '#0284c7'
+            },
+            horzLine: {
+              color: '#38bdf8',
+              width: 1,
+              style: 3,
+              labelBackgroundColor: '#0284c7'
+            }
+          },
+          rightPriceScale: {
+            borderColor: '#1e293b',
+            scaleMargins: { top: 0.08, bottom: 0.18 }
+          },
+          timeScale: {
+            borderColor: '#1e293b',
+            timeVisible: true,
+            secondsVisible: false,
+            rightOffset: 12,
+            barSpacing: 8,
+            minBarSpacing: 1.5
+          }
+        });
+
+        state.candleSeries = state.chart.addCandlestickSeries({
+          upColor: '#10b981',
+          downColor: '#f43f5e',
+          borderUpColor: '#10b981',
+          borderDownColor: '#f43f5e',
+          wickUpColor: '#10b981',
+          wickDownColor: '#f43f5e'
+        });
+
+        state.volumeSeries = state.chart.addHistogramSeries({
+          priceFormat: { type: 'volume' },
+          priceScaleId: 'volume_pane',
+          scaleMargins: { top: 0.82, bottom: 0 }
+        });
+
+        state.chart.priceScale('volume_pane').applyOptions({
+          scaleMargins: { top: 0.82, bottom: 0 }
+        });
+
+        state.ctx = el.overlayCanvas.getContext('2d');
+        resizeCanvas();
+
+        const resizeObserver = new ResizeObserver(() => {
+          if (state.chart && el.chartContainer) {
+            const w = el.chartContainer.clientWidth;
+            const h = el.chartContainer.clientHeight;
+            state.chart.resize(w, h);
+            resizeCanvas();
+            scheduleOverlayRender();
+          }
+        });
+        resizeObserver.observe(el.chartContainer);
+
+        state.chart.timeScale().subscribeVisibleLogicalRangeChange(() => scheduleOverlayRender());
+        state.chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleOverlayRender());
+        state.chart.subscribeCrosshairMove(onCrosshairMove);
+      }
+
+      function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const w = el.chartContainer.clientWidth;
+        const h = el.chartContainer.clientHeight;
+        if (w === 0 || h === 0) return;
+        el.overlayCanvas.width = Math.round(w * dpr);
+        el.overlayCanvas.height = Math.round(h * dpr);
+        el.overlayCanvas.style.width = w + 'px';
+        el.overlayCanvas.style.height = h + 'px';
+        state.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      // --- Load Data (Preloaded JS or Fetch JSON) ---
+      async function loadData() {
+        try {
+          if (window.SMC_PRELOADED_DATA) {
+            applyData(window.SMC_PRELOADED_DATA);
+            return;
+          }
+
+          const res = await fetch('smc_data.json');
+          if (res.ok) {
+            const data = await res.json();
+            applyData(data);
+          } else {
+            throw new Error(`HTTP ${res.status}`);
+          }
+        } catch (err) {
+          console.warn('Direct fetch failed, checking fallback...', err);
+          el.loadingOverlay.innerHTML = `
+            <div style="color: #f43f5e; font-size: 16px; font-weight: 700;">Data Load Error</div>
+            <div style="color: #94a3b8; font-size: 12px; max-width: 450px; text-align: center;">
+              Please ensure <code>generate_smc_data.py</code> has been run and <code>smc_data.js</code> or <code>smc_data.json</code> is present.
+            </div>
+          `;
+        }
+      }
+
+      function applyData(data) {
+        state.data = data;
+        state.candles = data.candles || [];
+        state.volume = data.volume || [];
+        state.fvg = data.fvg || [];
+        state.ob = data.ob || [];
+        state.swings = data.swings || [];
+        state.bosChoch = data.bos_choch || [];
+        state.liquidity = data.liquidity || [];
+        state.atrbot = data.atrbot || [];
+
+        // Set series data
+        state.candleSeries.setData(state.candles);
+        state.volumeSeries.setData(state.volume);
+
+        // Update counts & metrics
+        el.totalCandlesCount.innerText = Number(data.totalCandles).toLocaleString();
+        if (state.candles.length > 0) {
+          const lastCandle = state.candles[state.candles.length - 1];
+          el.lastPriceVal.innerText = '$' + Number(lastCandle.close).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          updateHUD(lastCandle);
+        }
+
+        const summary = data.summary || {};
+        el.countFVG.innerText = Number(summary.totalFVG || state.fvg.length).toLocaleString();
+        el.countOB.innerText = Number(summary.totalOB || state.ob.length).toLocaleString();
+        el.countBOS.innerText = Number((summary.totalBOS || 0) + (summary.totalCHOCH || 0)).toLocaleString();
+        el.countSwings.innerText = Number(summary.totalSwings || state.swings.length).toLocaleString();
+        el.countLiq.innerText = Number(summary.totalLiquidity || state.liquidity.length).toLocaleString();
+
+        // Update Modal details
+        const totalBuys = summary.atrBotBuys || state.atrbot.filter(a => a.isBuy).length;
+        const totalSells = summary.atrBotSells || state.atrbot.filter(a => a.isSell).length;
+        el.mATRSignals.innerText = `${totalBuys + totalSells}`;
+        el.mATRBreakdown.innerText = `${totalBuys} Buy ▲, ${totalSells} Sell ▼`;
+        el.mTotalFVG.innerText = Number(summary.totalFVG || state.fvg.length).toLocaleString();
+        el.mUnmitFVG.innerText = `${summary.unmitigatedFVG || 0} Open (${summary.bullishFVG || 0} Bull, ${summary.bearishFVG || 0} Bear)`;
+        el.mTotalOB.innerText = Number(summary.totalOB || state.ob.length).toLocaleString();
+        el.mUnmitOB.innerText = `${summary.unmitigatedOB || 0} Active (${summary.bullishOB || 0} Bull, ${summary.bearishOB || 0} Bear)`;
+        el.mTotalBOS.innerText = `${(summary.totalBOS || 0) + (summary.totalCHOCH || 0)}`;
+        el.mBOSBreakdown.innerText = `${summary.totalBOS || 0} BOS, ${summary.totalCHOCH || 0} CHoCH`;
+
+        // Default viewport: show last 250 candles
+        const total = state.candles.length;
+        if (total > 0) {
+          state.chart.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, total - 250),
+            to: total + 10
+          });
+        }
+
+        // Hide loader
+        el.loadingOverlay.style.opacity = '0';
+        setTimeout(() => {
+          el.loadingOverlay.style.display = 'none';
+        }, 300);
+
+        scheduleOverlayRender();
+      }
+
+      // --- Overlay Scheduling ---
+      function scheduleOverlayRender() {
+        if (!state.renderScheduled) {
+          state.renderScheduled = true;
+          requestAnimationFrame(() => {
+            renderOverlay();
+            state.renderScheduled = false;
+          });
+        }
+      }
+
+      // --- Main Canvas Overlay Render Engine ---
+      function renderOverlay() {
+        if (!state.chart || !state.candleSeries || !state.ctx) return;
+
+        const w = el.chartContainer.clientWidth;
+        const h = el.chartContainer.clientHeight;
+        state.ctx.clearRect(0, 0, w, h);
+
+        const timeScale = state.chart.timeScale();
+        const visibleRange = timeScale.getVisibleRange();
+        if (!visibleRange) return;
+
+        const fromTime = visibleRange.from;
+        const toTime = visibleRange.to;
+        const rightViewportX = w - 65;
+
+        const getX = (t) => (t !== null && t !== undefined) ? timeScale.timeToCoordinate(t) : null;
+        const getY = (p) => (p !== null && p !== undefined && !isNaN(p)) ? state.candleSeries.priceToCoordinate(p) : null;
+
+        // 1. Render ATRBot (VIDYA 14, Period 21, Multiplier 2.0)
+        if (state.showATRBot && state.atrbot.length > 0) {
+          renderATRBotOverlay(getX, getY, fromTime, toTime);
+        }
+
+        // 2. Render Order Blocks (OB)
+        if (state.showOB && state.ob.length > 0) {
+          renderOB(getX, getY, fromTime, toTime, rightViewportX);
+        }
+
+        // 3. Render Fair Value Gaps (FVG)
+        if (state.showFVG && state.fvg.length > 0) {
+          renderFVG(getX, getY, fromTime, toTime, rightViewportX);
+        }
+
+        // 4. Render Liquidity Zones
+        if (state.showLiquidity && state.liquidity.length > 0) {
+          renderLiquidity(getX, getY, fromTime, toTime, rightViewportX);
+        }
+
+        // 5. Render BOS & CHoCH Breakouts
+        if (state.showBOS && state.bosChoch.length > 0) {
+          renderBOSChoch(getX, getY, fromTime, toTime);
+        }
+
+        // 6. Render Swing Highs & Lows
+        if (state.showSwings && state.swings.length > 0) {
+          renderSwings(getX, getY, fromTime, toTime);
+        }
+      }
+
+      // --- Draw ATR Bot (VIDYA + Trailing Stop + Cloud + Signals) ---
+      function renderATRBotOverlay(getX, getY, fromTime, toTime) {
+        const data = state.atrbot;
+        const n = data.length;
+        if (n < 2) return;
+
+        const ctx = state.ctx;
+        ctx.save();
+
+        // 1. Ribbon Cloud Fill between Trail 1 (VIDYA) and Trail 2 (Trailing Stop)
+        if (state.showATRRibbon) {
+          for (let i = 1; i < n; i++) {
+            const p1 = data[i - 1];
+            const p2 = data[i];
+            if (p2.time < fromTime || p1.time > toTime) continue;
+
+            const x1 = getX(p1.time);
+            const x2 = getX(p2.time);
+            const y1_t1 = getY(p1.trail1);
+            const y1_t2 = getY(p1.trail2);
+            const y2_t1 = getY(p2.trail1);
+            const y2_t2 = getY(p2.trail2);
+
+            if (x1 === null || x2 === null || y1_t1 === null || y1_t2 === null || y2_t1 === null || y2_t2 === null) continue;
+
+            const isBull = p2.trail1 >= p2.trail2;
+            ctx.fillStyle = isBull ? 'rgba(16, 185, 129, 0.16)' : 'rgba(244, 63, 94, 0.16)';
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1_t1);
+            ctx.lineTo(x2, y2_t1);
+            ctx.lineTo(x2, y2_t2);
+            ctx.lineTo(x1, y1_t2);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+
+        // 2. Stroke Trail 1 Line (VIDYA Fast line - Cyan #06b6d4)
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = '#06b6d4';
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < n; i++) {
+          const item = data[i];
+          if (item.time < fromTime || item.time > toTime) continue;
+          const x = getX(item.time);
+          const y = getY(item.trail1);
+          if (x === null || y === null) continue;
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else { ctx.lineTo(x, y); }
+        }
+        if (started) ctx.stroke();
+
+        // 3. Stroke Trail 2 Line (ATR Trailing Stop line - Amber #f59e0b)
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = '#f59e0b';
+        ctx.beginPath();
+        started = false;
+        for (let i = 0; i < n; i++) {
+          const item = data[i];
+          if (item.time < fromTime || item.time > toTime) continue;
+          const x = getX(item.time);
+          const y = getY(item.trail2);
+          if (x === null || y === null) continue;
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else { ctx.lineTo(x, y); }
+        }
+        if (started) ctx.stroke();
+
+        // 4. Render Buy & Sell Signals
+        if (state.showATRSignals) {
+          for (let i = 0; i < n; i++) {
+            const item = data[i];
+            if (!item.isBuy && !item.isSell) continue;
+            if (item.time < fromTime || item.time > toTime) continue;
+
+            const x = getX(item.time);
+            const y = getY(item.trail2);
+            if (x === null || y === null) continue;
+
+            const isBuy = item.isBuy;
+            const label = isBuy ? 'BUY ▲' : 'SELL ▼';
+            const pillY = isBuy ? y + 18 : y - 18;
+
+            ctx.font = 'bold 9px "JetBrains Mono", monospace';
+            const textW = ctx.measureText(label).width;
+            const badgeW = textW + 8;
+            const badgeH = 15;
+
+            ctx.fillStyle = isBuy ? 'rgba(16, 185, 129, 0.95)' : 'rgba(244, 63, 94, 0.95)';
+            if (ctx.roundRect) {
+              ctx.beginPath();
+              ctx.roundRect(x - badgeW / 2, pillY - badgeH / 2, badgeW, badgeH, 4);
+              ctx.fill();
+            } else {
+              ctx.fillRect(x - badgeW / 2, pillY - badgeH / 2, badgeW, badgeH);
+            }
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x, pillY);
+          }
+        }
+
+        ctx.restore();
+      }
+
+      // --- Draw Fair Value Gaps (FVG) ---
+      function renderFVG(getX, getY, fromTime, toTime, rightViewportX) {
+        const ctx = state.ctx;
+        const latestTime = state.candles.length > 0 ? state.candles[state.candles.length - 1].time : toTime;
+
+        for (let i = 0; i < state.fvg.length; i++) {
+          const item = state.fvg[i];
+          if (state.fvgUnmitigatedOnly && item.mitigated) continue;
+
+          const endTime = item.mitigatedTime || latestTime;
+          if (endTime < fromTime || item.time > toTime) continue;
+
+          const x1 = getX(item.time);
+          const x2 = item.mitigatedTime ? getX(item.mitigatedTime) : rightViewportX;
+
+          const startX = x1 !== null ? x1 : 0;
+          const endX = x2 !== null ? x2 : rightViewportX;
+          const boxW = Math.max(endX - startX, 4);
+
+          const yTop = getY(item.top);
+          const yBottom = getY(item.bottom);
+          if (yTop === null || yBottom === null) continue;
+
+          const boxY = Math.min(yTop, yBottom);
+          const boxH = Math.max(Math.abs(yBottom - yTop), 2);
+          const isBull = item.type === 1;
+
+          ctx.save();
+
+          // Fill Box
+          ctx.fillStyle = isBull 
+            ? (item.mitigated ? 'rgba(16, 185, 129, 0.10)' : 'rgba(16, 185, 129, 0.22)')
+            : (item.mitigated ? 'rgba(244, 63, 94, 0.10)' : 'rgba(244, 63, 94, 0.22)');
+          ctx.fillRect(startX, boxY, boxW, boxH);
+
+          // Border
+          ctx.strokeStyle = isBull 
+            ? (item.mitigated ? 'rgba(16, 185, 129, 0.35)' : 'rgba(16, 185, 129, 0.90)')
+            : (item.mitigated ? 'rgba(244, 63, 94, 0.35)' : 'rgba(244, 63, 94, 0.90)');
+          ctx.lineWidth = item.mitigated ? 1 : 1.4;
+          ctx.strokeRect(startX, boxY, boxW, boxH);
+
+          // Equilibrium 50% line
+          ctx.beginPath();
+          ctx.setLineDash([2, 3]);
+          ctx.strokeStyle = isBull ? 'rgba(52, 211, 153, 0.35)' : 'rgba(251, 113, 133, 0.35)';
+          ctx.moveTo(startX, boxY + boxH / 2);
+          ctx.lineTo(endX, boxY + boxH / 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Tag Label if box is wide enough
+          if (boxW > 35) {
+            ctx.font = 'bold 9px "JetBrains Mono", monospace';
+            ctx.fillStyle = isBull ? '#34d399' : '#fb7185';
+            const labelText = isBull ? 'FVG +' : 'FVG -';
+            ctx.fillText(labelText, startX + 4, boxY + 11);
+
+            if (!item.mitigated && boxW > 80) {
+              ctx.fillStyle = isBull ? 'rgba(52, 211, 153, 0.7)' : 'rgba(251, 113, 133, 0.7)';
+              ctx.font = '8px "JetBrains Mono", monospace';
+              ctx.fillText('OPEN', endX - 28, boxY + 11);
+            }
+          }
+
+          ctx.restore();
+        }
+      }
+
+      // --- Draw Order Blocks (OB) ---
+      function renderOB(getX, getY, fromTime, toTime, rightViewportX) {
+        const ctx = state.ctx;
+        const latestTime = state.candles.length > 0 ? state.candles[state.candles.length - 1].time : toTime;
+
+        for (let i = 0; i < state.ob.length; i++) {
+          const item = state.ob[i];
+          const endTime = item.mitigatedTime || latestTime;
+          if (endTime < fromTime || item.time > toTime) continue;
+
+          const x1 = getX(item.time);
+          const x2 = item.mitigatedTime ? getX(item.mitigatedTime) : rightViewportX;
+
+          const startX = x1 !== null ? x1 : 0;
+          const endX = x2 !== null ? x2 : rightViewportX;
+          const boxW = Math.max(endX - startX, 4);
+
+          const yTop = getY(item.top);
+          const yBottom = getY(item.bottom);
+          if (yTop === null || yBottom === null) continue;
+
+          const boxY = Math.min(yTop, yBottom);
+          const boxH = Math.max(Math.abs(yBottom - yTop), 3);
+          const isBull = item.type === 1;
+
+          ctx.save();
+
+          // OB Shaded Area
+          ctx.fillStyle = isBull ? 'rgba(59, 130, 246, 0.22)' : 'rgba(245, 158, 11, 0.22)';
+          ctx.fillRect(startX, boxY, boxW, boxH);
+
+          // OB Border
+          ctx.strokeStyle = isBull ? '#3b82f6' : '#f59e0b';
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(startX, boxY, boxW, boxH);
+
+          // OB Label
+          if (boxW > 30) {
+            ctx.font = 'bold 9px "JetBrains Mono", monospace';
+            ctx.fillStyle = isBull ? '#93c5fd' : '#fde68a';
+            ctx.fillText(isBull ? 'OB +' : 'OB -', startX + 5, boxY + 12);
+          }
+
+          ctx.restore();
+        }
+      }
+
+      // --- Draw Break of Structure (BOS) & CHoCH ---
+      function renderBOSChoch(getX, getY, fromTime, toTime) {
+        const ctx = state.ctx;
+
+        for (let i = 0; i < state.bosChoch.length; i++) {
+          const item = state.bosChoch[i];
+          if (item.brokenTime < fromTime || item.originTime > toTime) continue;
+
+          const x1 = getX(item.originTime);
+          const x2 = getX(item.brokenTime);
+          const y = getY(item.level);
+
+          if (x1 === null || x2 === null || y === null) continue;
+
+          const isBOS = item.isBOS;
+          const isBull = item.direction === 1;
+
+          ctx.save();
+
+          // Line
+          ctx.beginPath();
+          ctx.strokeStyle = isBOS 
+            ? (isBull ? '#06b6d4' : '#0ea5e9') 
+            : (isBull ? '#a855f7' : '#ec4899');
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(isBOS ? [3, 2] : []);
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Badge Pill at mid / end
+          const label = isBOS ? (isBull ? 'BOS ▲' : 'BOS ▼') : (isBull ? 'CHoCH ▲' : 'CHoCH ▼');
+          const badgeX = (x1 + x2) / 2;
+          
+          ctx.font = 'bold 9px "JetBrains Mono", monospace';
+          const textW = ctx.measureText(label).width;
+          const badgeW = textW + 8;
+          const badgeH = 14;
+
+          ctx.fillStyle = isBOS ? 'rgba(6, 182, 212, 0.95)' : 'rgba(236, 72, 153, 0.95)';
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(badgeX - badgeW / 2, y - badgeH / 2, badgeW, badgeH, 3);
+            ctx.fill();
+          } else {
+            ctx.fillRect(badgeX - badgeW / 2, y - badgeH / 2, badgeW, badgeH);
+          }
+
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, badgeX, y);
+
+          ctx.restore();
+        }
+      }
+
+      // --- Draw Swing Highs & Lows ---
+      function renderSwings(getX, getY, fromTime, toTime) {
+        const ctx = state.ctx;
+
+        for (let i = 0; i < state.swings.length; i++) {
+          const item = state.swings[i];
+          if (item.time < fromTime || item.time > toTime) continue;
+
+          const x = getX(item.time);
+          const y = getY(item.level);
+          if (x === null || y === null) continue;
+
+          const isHigh = item.type === 1;
+          const tag = item.tag || (isHigh ? 'H' : 'L');
+
+          ctx.save();
+
+          // Dotted anchor
+          ctx.beginPath();
+          ctx.setLineDash([2, 2]);
+          ctx.strokeStyle = isHigh ? 'rgba(244, 63, 94, 0.6)' : 'rgba(16, 185, 129, 0.6)';
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, isHigh ? y - 14 : y + 14);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Circle dot
+          ctx.beginPath();
+          ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = isHigh ? '#f43f5e' : '#10b981';
+          ctx.fill();
+
+          // Tag Pill
+          const pillY = isHigh ? y - 18 : y + 18;
+          ctx.font = 'bold 9px "JetBrains Mono", monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          const textW = ctx.measureText(tag).width;
+          ctx.fillStyle = isHigh ? 'rgba(244, 63, 94, 0.2)' : 'rgba(16, 185, 129, 0.2)';
+          ctx.strokeStyle = isHigh ? '#f43f5e' : '#10b981';
+          ctx.lineWidth = 1;
+
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(x - (textW + 6) / 2, pillY - 7, textW + 6, 14, 3);
+            ctx.fill();
+            ctx.stroke();
+          } else {
+            ctx.fillRect(x - (textW + 6) / 2, pillY - 7, textW + 6, 14);
+            ctx.strokeRect(x - (textW + 6) / 2, pillY - 7, textW + 6, 14);
+          }
+
+          ctx.fillStyle = isHigh ? '#fb7185' : '#34d399';
+          ctx.fillText(tag, x, pillY);
+
+          ctx.restore();
+        }
+      }
+
+      // --- Draw Liquidity Zones ---
+      function renderLiquidity(getX, getY, fromTime, toTime, rightViewportX) {
+        const ctx = state.ctx;
+
+        for (let i = 0; i < state.liquidity.length; i++) {
+          const item = state.liquidity[i];
+          const endTime = item.sweptTime || item.endTime;
+          if (endTime < fromTime || item.time > toTime) continue;
+
+          const x1 = getX(item.time);
+          const x2 = item.sweptTime ? getX(item.sweptTime) : rightViewportX;
+          const y = getY(item.level);
+
+          if (x1 === null || y === null) continue;
+          const endX = x2 !== null ? x2 : rightViewportX;
+
+          const isHigh = item.type === 1;
+          const color = isHigh ? '#e879f9' : '#818cf8';
+          const bgColor = isHigh ? 'rgba(217, 70, 239, 0.22)' : 'rgba(99, 102, 241, 0.22)';
+          const borderColor = isHigh ? '#d946ef' : '#6366f1';
+
+          ctx.save();
+
+          // Dotted level line
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 4]);
+          ctx.moveTo(x1, y);
+          ctx.lineTo(endX, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Large & Clear Liquidity Badge
+          const label = isHigh ? `💧 BSL $$$ ${Number(item.level).toFixed(2)}` : `💧 SSL $$$ ${Number(item.level).toFixed(2)}`;
+          ctx.font = 'bold 12px "JetBrains Mono", monospace';
+          const textW = ctx.measureText(label).width;
+          const badgeW = textW + 12;
+          const badgeH = 20;
+          const badgeX = x1 + 6;
+          const badgeY = isHigh ? y - badgeH - 3 : y + 3;
+
+          // Draw Badge Box
+          ctx.fillStyle = bgColor;
+          ctx.strokeStyle = borderColor;
+          ctx.lineWidth = 1.2;
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 4);
+            ctx.fill();
+            ctx.stroke();
+          } else {
+            ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+            ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
+          }
+
+          // Badge Text
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(label, badgeX + 6, badgeY + badgeH / 2);
+
+          // Swept Status Badge
+          if (item.swept && x2 !== null) {
+            const sweptLabel = '✕ SWEPT';
+            ctx.font = 'bold 11px "JetBrains Mono", monospace';
+            const sweptW = ctx.measureText(sweptLabel).width + 10;
+            const sweptH = 18;
+            const sweptX = endX - sweptW - 4;
+            const sweptY = isHigh ? y - sweptH - 3 : y + 3;
+
+            ctx.fillStyle = 'rgba(244, 63, 94, 0.9)';
+            if (ctx.roundRect) {
+              ctx.beginPath();
+              ctx.roundRect(sweptX, sweptY, sweptW, sweptH, 3);
+              ctx.fill();
+            } else {
+              ctx.fillRect(sweptX, sweptY, sweptW, sweptH);
+            }
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(sweptLabel, sweptX + sweptW / 2, sweptY + sweptH / 2);
+          }
+
+          ctx.restore();
+        }
+      }
+
+      // --- Crosshair Move HUD Update ---
+      function onCrosshairMove(param) {
+        if (!param || !param.time || !state.candles.length) return;
+
+        const candle = state.candles.find(c => c.time === param.time);
+        if (!candle) return;
+
+        updateHUD(candle);
+      }
+
+      function updateHUD(candle) {
+        const d = new Date(candle.time * 1000);
+        el.hudTime.innerText = d.toISOString().replace('T', ' ').slice(0, 16);
+        el.hudOpen.innerText = Number(candle.open).toFixed(2);
+        el.hudHigh.innerText = Number(candle.high).toFixed(2);
+        el.hudLow.innerText = Number(candle.low).toFixed(2);
+        el.hudClose.innerText = Number(candle.close).toFixed(2);
+        
+        const isUp = candle.close >= candle.open;
+        el.hudClose.style.color = isUp ? '#10b981' : '#f43f5e';
+
+        const volItem = state.volume.find(v => v.time === candle.time);
+        el.hudVol.innerText = volItem ? Number(volItem.value).toFixed(2) : '--';
+
+        // ATRBot HUD info
+        const atrHit = state.atrbot.find(a => a.time === candle.time);
+        if (atrHit) {
+          el.hudTrail1.innerText = Number(atrHit.trail1).toFixed(2);
+          el.hudTrail2.innerText = Number(atrHit.trail2).toFixed(2);
+          el.hudAtrVal.innerText = Number(atrHit.atr).toFixed(2);
+          el.hudTrendVal.innerText = atrHit.trend === 1 ? 'BULL ▲' : 'BEAR ▼';
+          el.hudTrendVal.style.color = atrHit.trend === 1 ? '#10b981' : '#f43f5e';
+        }
+
+        // Check active SMC & ATR elements at this bar
+        const tags = [];
+        if (atrHit && atrHit.isBuy) {
+          tags.push(`<span class="hud-badge badge-atr-buy">ATR BUY SIGNAL ▲</span>`);
+        }
+        if (atrHit && atrHit.isSell) {
+          tags.push(`<span class="hud-badge badge-atr-sell">ATR SELL SIGNAL ▼</span>`);
+        }
+
+        const fvgHit = state.fvg.find(f => f.time === candle.time);
+        if (fvgHit) {
+          tags.push(`<span class="hud-badge ${fvgHit.type === 1 ? 'badge-fvg-bull' : 'badge-fvg-bear'}">FVG ${fvgHit.type === 1 ? 'BULL' : 'BEAR'}</span>`);
+        }
+
+        const obHit = state.ob.find(o => o.time === candle.time);
+        if (obHit) {
+          tags.push(`<span class="hud-badge ${obHit.type === 1 ? 'badge-ob-bull' : 'badge-ob-bear'}">OB ${obHit.type === 1 ? 'BULL' : 'BEAR'}</span>`);
+        }
+
+        const bosHit = state.bosChoch.find(b => b.brokenTime === candle.time);
+        if (bosHit) {
+          tags.push(`<span class="hud-badge ${bosHit.isBOS ? 'badge-bos' : 'badge-choch'}">${bosHit.isBOS ? 'BOS' : 'CHOCH'} ${bosHit.direction === 1 ? '▲' : '▼'}</span>`);
+        }
+
+        const liqHit = state.liquidity.find(l => l.time === candle.time || l.sweptTime === candle.time);
+        if (liqHit) {
+          const isOrigin = liqHit.time === candle.time;
+          tags.push(`<span class="hud-badge" style="background: rgba(217, 70, 239, 0.25); color: #f0abfc; border: 1px solid #d946ef;">${isOrigin ? 'LIQ CREATED' : 'LIQ SWEPT'} (${liqHit.type === 1 ? 'BSL' : 'SSL'})</span>`);
+        }
+
+        el.hudSmcTags.innerHTML = tags.join('');
+      }
+
+      // --- Setup Event Listeners ---
+      function setupEventListeners() {
+        // Toggle ATRBot
+        el.toggleATRBot.addEventListener('click', () => {
+          state.showATRBot = !state.showATRBot;
+          el.toggleATRBot.classList.toggle('active', state.showATRBot);
+          scheduleOverlayRender();
+        });
+
+        // Toggle ATR Ribbon
+        el.toggleATRRibbon.addEventListener('click', () => {
+          state.showATRRibbon = !state.showATRRibbon;
+          el.toggleATRRibbon.classList.toggle('active', state.showATRRibbon);
+          scheduleOverlayRender();
+        });
+
+        // Toggle ATR Signals
+        el.toggleATRSignals.addEventListener('click', () => {
+          state.showATRSignals = !state.showATRSignals;
+          el.toggleATRSignals.classList.toggle('active', state.showATRSignals);
+          scheduleOverlayRender();
+        });
+
+        // Toggle FVG
+        el.toggleFVG.addEventListener('click', () => {
+          state.showFVG = !state.showFVG;
+          el.toggleFVG.classList.toggle('active', state.showFVG);
+          scheduleOverlayRender();
+        });
+
+        // Toggle FVG Unmitigated Only
+        el.toggleFVGUnmitigated.addEventListener('click', () => {
+          state.fvgUnmitigatedOnly = !state.fvgUnmitigatedOnly;
+          el.toggleFVGUnmitigated.classList.toggle('active', state.fvgUnmitigatedOnly);
+          scheduleOverlayRender();
+        });
+
+        // Toggle OB
+        el.toggleOB.addEventListener('click', () => {
+          state.showOB = !state.showOB;
+          el.toggleOB.classList.toggle('active', state.showOB);
+          scheduleOverlayRender();
+        });
+
+        // Toggle BOS
+        el.toggleBOS.addEventListener('click', () => {
+          state.showBOS = !state.showBOS;
+          el.toggleBOS.classList.toggle('active', state.showBOS);
+          scheduleOverlayRender();
+        });
+
+        // Toggle Swings
+        el.toggleSwings.addEventListener('click', () => {
+          state.showSwings = !state.showSwings;
+          el.toggleSwings.classList.toggle('active', state.showSwings);
+          scheduleOverlayRender();
+        });
+
+        // Toggle Liquidity
+        el.toggleLiquidity.addEventListener('click', () => {
+          state.showLiquidity = !state.showLiquidity;
+          el.toggleLiquidity.classList.toggle('active', state.showLiquidity);
+          scheduleOverlayRender();
+        });
+
+        // Zoom & Navigation
+        el.btnZoom100.addEventListener('click', () => zoomBars(100));
+        el.btnZoom300.addEventListener('click', () => zoomBars(300));
+        el.btnZoom1000.addEventListener('click', () => zoomBars(1000));
+        el.btnFitAll.addEventListener('click', () => {
+          if (state.chart) state.chart.timeScale().fitContent();
+        });
+        el.btnLatest.addEventListener('click', () => {
+          if (state.chart) state.chart.timeScale().scrollToRealtime();
+        });
+
+        // Modal
+        el.btnOpenInfo.addEventListener('click', () => {
+          el.infoModal.style.display = 'flex';
+        });
+        el.btnCloseModal.addEventListener('click', () => {
+          el.infoModal.style.display = 'none';
+        });
+        el.infoModal.addEventListener('click', (e) => {
+          if (e.target === el.infoModal) el.infoModal.style.display = 'none';
+        });
+      }
+
+      function zoomBars(count) {
+        if (!state.chart || !state.candles.length) return;
+        const total = state.candles.length;
+        state.chart.timeScale().setVisibleLogicalRange({
+          from: Math.max(0, total - count),
+          to: total + 5
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

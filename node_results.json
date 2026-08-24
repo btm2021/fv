@@ -1,0 +1,20 @@
+{
+  "fvgCount": 2197,
+  "bullFVG": 1102,
+  "bearFVG": 1095,
+  "swingsCount": 299,
+  "bosCount": 80,
+  "chochCount": 46,
+  "obCount": 25,
+  "bullOB": 13,
+  "bearOB": 12,
+  "liqCount": 68,
+  "sweptLiq": 62,
+  "atrBuys": 26,
+  "atrSells": 26,
+  "atrLastT1": 77237.1002191816,
+  "atrLastT2": 76785.24196853365,
+  "vsrSpikes": 93,
+  "vsrLastUpper": 78589.9,
+  "vsrLastLower": 76510
+}
