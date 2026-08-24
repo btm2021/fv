@@ -63,8 +63,8 @@
       tb.style.display = 'none';
       tb.innerHTML = `
         <div class="replay-tb-inner">
-          <div class="replay-badge">⏪ REPLAY</div>
-          <button id="btnReplayCut" class="replay-btn" title="Jump to bar (Cut chart)">✂️ Cut</button>
+          <div class="replay-badge"><span class="badge-icon">⏪</span><span class="badge-text"> REPLAY</span></div>
+          <button id="btnReplayCut" class="replay-btn" title="Jump to bar (Cut chart)"><span>✂️</span><span class="btn-cut-text"> Cut</span></button>
           <div class="replay-sep"></div>
           <button id="btnReplayPrev" class="replay-btn" title="Step Back 1 bar (←)">⏮</button>
           <button id="btnReplayPlay" class="replay-btn btn-play" title="Play / Pause (Space)">▶</button>
