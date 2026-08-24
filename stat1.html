@@ -87,15 +87,21 @@
       font-family: 'JetBrains Mono', monospace;
       font-weight: 700;
       font-size: 13px;
-      letter-spacing: 1px;
+      letter-spacing: 0.5px;
       background: linear-gradient(135deg, #0284c7, #6366f1);
       color: #ffffff;
-      padding: 4px 10px;
+      padding: 4px 8px;
       border-radius: 6px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
       box-shadow: 0 0 15px rgba(2, 132, 199, 0.35);
+      flex-shrink: 0;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .logo-text-short {
+      display: none;
     }
 
     /* Searchable Symbol Picker Button */
@@ -1204,6 +1210,97 @@
       min-width: 90px;
       text-align: center;
     }
+
+    /* --- Responsive Mobile & Tablet Rules --- */
+    @media (max-width: 992px) {
+      .logo-text-full { display: none; }
+      .logo-text-short { display: inline; }
+      .sym-badge-chg { display: none; }
+    }
+
+    @media (max-width: 768px) {
+      header.app-header {
+        height: 48px;
+        padding: 0 8px;
+        gap: 6px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      header.app-header::-webkit-scrollbar {
+        display: none;
+      }
+      .header-left, .header-right {
+        gap: 5px;
+        flex-shrink: 0;
+      }
+      .logo-badge {
+        font-size: 11px;
+        padding: 4px 6px;
+      }
+      .symbol-picker-btn {
+        padding: 5px 8px;
+        font-size: 11px;
+        gap: 5px;
+      }
+      .sym-badge-price {
+        font-size: 11px;
+      }
+      .select-pill {
+        padding: 5px 6px;
+        font-size: 11px;
+      }
+      #limitSelect {
+        display: none; /* Hide limit selector on small screens */
+      }
+      .btn-action, .btn-fx-indicators {
+        padding: 5px 8px;
+        font-size: 11px;
+      }
+      .tv-draw-sidebar {
+        width: 38px;
+        padding: 6px 0;
+        gap: 3px;
+      }
+      .draw-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 13px;
+      }
+      .draw-sep {
+        width: 20px;
+      }
+      .replay-toolbar {
+        top: 8px;
+        padding: 3px 6px;
+      }
+      .replay-btn {
+        padding: 3px 6px;
+        font-size: 11px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .logo-badge {
+        padding: 3px 5px;
+        font-size: 11px;
+      }
+      .logo-text-full, .logo-text-short {
+        display: none; /* Show icon only on small phones */
+      }
+      .sym-badge-price {
+        display: none;
+      }
+      #btnOpenReplay {
+        padding: 4px 6px;
+        font-size: 11px;
+      }
+      .btn-fx-indicators span:not(.fx-icon) {
+        display: none;
+      }
+      .btn-fx-indicators {
+        padding: 4px 8px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1211,7 +1308,11 @@
   <!-- 1. Navigation Header -->
   <header class="app-header">
     <div class="header-left">
-      <div class="logo-badge">⚡ STAT1 SMC</div>
+      <div class="logo-badge" title="STAT1 SMC Terminal">
+        <span class="logo-icon">⚡</span>
+        <span class="logo-text-full">STAT1 SMC</span>
+        <span class="logo-text-short">STAT1</span>
+      </div>
       
       <!-- Searchable Symbol Picker Button -->
       <button class="symbol-picker-btn" id="btnOpenSymbolPicker" title="Click to search & filter all Binance Futures symbols">
@@ -1245,15 +1346,6 @@
     </div>
 
     <div class="header-right">
-      <!-- Cache Status Badge -->
-      <div class="cache-status-pill" id="cacheBadge">⚡ IndexedDB Initializing...</div>
-
-      <!-- Sync / Force Reload -->
-      <button class="btn-action" id="btnReload" title="Force download fresh candles from Binance API">🔄 Sync</button>
-
-      <!-- Clear Cache -->
-      <button class="btn-action" id="btnClearCache" title="Wipe IndexedDB cached bars">🗑️ Clear DB</button>
-
       <!-- TradingView-Style Replay Button -->
       <button class="btn-action" id="btnOpenReplay" style="border-color: #6366f1; color: #a5b4fc;" title="Bar Replay Mode (Cut history & step forward)">⏪ Replay</button>
 
@@ -1262,13 +1354,6 @@
         <span class="fx-icon">fx</span>
         <span>Indicators</span>
       </button>
-
-      <!-- Navigation to Index & 10k Test -->
-      <a href="index.html" class="btn-action" style="text-decoration: none;" title="Open Main Chart">🏠 Main</a>
-      <a href="smctest.html" class="btn-action" style="text-decoration: none;" title="Open Python 10k SMC Test Chart">📊 10k Test</a>
-
-      <!-- Info Modal -->
-      <button class="btn-action" id="btnOpenInfo" title="System info and metrics">ℹ️ Info</button>
     </div>
   </header>
 
@@ -1286,6 +1371,9 @@
       <div class="draw-sep"></div>
       <button class="draw-btn" id="btnDeleteDrawing" title="Delete Selected Drawing (Del)">🗑️</button>
       <button class="draw-btn" id="btnClearAllDrawings" title="Clear All Drawings">✕</button>
+      <div class="draw-sep"></div>
+      <button class="draw-btn" id="btnReload" title="Force Sync / Reload Data from Binance">🔄</button>
+      <button class="draw-btn" id="btnClearCache" title="Clear IndexedDB Cache">🗑️ DB</button>
     </aside>
 
     <!-- Workspace Area: Chart & Canvas Overlay -->
@@ -1400,22 +1488,6 @@
       <!-- Scrollable Symbols List -->
       <div class="sym-list-container" id="symbolListContainer">
         <!-- Rendered dynamically -->
-      </div>
-    </div>
-  </div>
-
-  <!-- 6. System Info Modal -->
-  <div class="modal-backdrop" id="infoModal">
-    <div class="modal-box">
-      <div class="modal-title">
-        <span>⚡ STAT1 Engine Information</span>
-        <button class="btn-close" id="btnCloseModal">✕</button>
-      </div>
-      <div style="font-size: 13px; line-height: 1.6; color: #cbd5e1;">
-        <p>• <b>TradingView-Style Indicator Legend & Settings</b>: Tùy chỉnh thông số (Inputs) và giao diện (Style, Line, Fill, Colors) trực tiếp trên Chart, lưu vĩnh viễn vào IndexedDB.</p>
-        <p style="margin-top: 8px;">• <b>Modular Indicator System</b>: Mỗi indicator là 1 file riêng biệt (<code>indicators/</code>) với schema Inputs & Style chuẩn TradingView.</p>
-        <p style="margin-top: 8px;">• <b>Dynamic Binance exchangeInfo & 24hr Tickers</b>: Tải 1 lần danh sách đầy đủ tất cả các cặp giao dịch Futures kèm Volume 24h, Last Price, và % thay đổi giá, sau đó tự động lưu vào IndexedDB.</p>
-        <p style="margin-top: 8px;">• <b>Pure Client-Side SMC</b>: Toàn bộ 15 chỉ báo SMC + ATRBot + VSR + EMA + VWAP được tính toán 100% bằng JavaScript với <code>smc.js</code>.</p>
       </div>
     </div>
   </div>

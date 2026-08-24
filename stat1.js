@@ -363,11 +363,6 @@
     el.hudTrendVal = document.getElementById('hudTrendVal');
     el.hudSmcTags = document.getElementById('hudSmcTags');
 
-    // Info Modal
-    el.btnOpenInfo = document.getElementById('btnOpenInfo');
-    el.btnCloseModal = document.getElementById('btnCloseModal');
-    el.infoModal = document.getElementById('infoModal');
-
     // Indicators Catalog Modal (TradingView fx Button)
     el.btnOpenIndicatorsCatalog = document.getElementById('btnOpenIndicatorsCatalog');
     el.indicatorsCatalogModal = document.getElementById('indicatorsCatalogModal');
@@ -1504,11 +1499,6 @@
       }
     });
 
-    // Details Modal
-    el.btnOpenInfo.addEventListener('click', () => { el.infoModal.style.display = 'flex'; });
-    el.btnCloseModal.addEventListener('click', () => { el.infoModal.style.display = 'none'; });
-    el.infoModal.addEventListener('click', (e) => { if (e.target === el.infoModal) el.infoModal.style.display = 'none'; });
-
     // Indicators Catalog Modal (TradingView fx Button)
     if (el.btnOpenIndicatorsCatalog) {
       el.btnOpenIndicatorsCatalog.addEventListener('click', openIndicatorsCatalogModal);
@@ -1638,6 +1628,7 @@
 
   // --- 12. Status & Helpers ---
   function updateCacheBadge(isCached, totalCount, newCount, errorMsg) {
+    if (!el.cacheBadge) return;
     if (errorMsg) {
       el.cacheBadge.innerHTML = `⚠️ <span style="color: #fb7185;">${errorMsg}</span>`;
       return;
