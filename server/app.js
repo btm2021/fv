@@ -150,6 +150,18 @@ app.delete('/api/strategies/:id', async (req, res) => {
   }
 });
 
+// Admin: Import Top 400 Symbols
+app.post('/api/admin/import-top-400', async (req, res) => {
+  try {
+    const importTop400 = require('../scripts/import_top_400_symbols');
+    // Run async in background
+    importTop400().catch(err => console.error('Background import top 400 error:', err));
+    res.json({ success: true, message: 'Top 400 Binance Futures import started in background.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4. Signals & Alerts
 app.get('/api/signals', async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;

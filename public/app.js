@@ -64,6 +64,7 @@ function initDom() {
 
   el.badgeActivePositions = document.getElementById('badgeActivePositions');
   el.badgeWhitelistCount = document.getElementById('badgeWhitelistCount');
+  el.btnImportTop400 = document.getElementById('btnImportTop400');
 
   // Chart elements
   el.chartSymbolSelect = document.getElementById('chartSymbolSelect');
@@ -1077,6 +1078,23 @@ function initEventListeners() {
         state.status = res.status;
         updateHeaderMetrics();
       }
+    });
+  }
+
+  // Import Top 400
+  if (el.btnImportTop400) {
+    el.btnImportTop400.addEventListener('click', async () => {
+      if (!confirm('Start fetching and importing Top 400 Binance Futures pairs on 5m timeframe?')) return;
+      el.btnImportTop400.disabled = true;
+      el.btnImportTop400.textContent = '⏳ Importing Top 400...';
+      const res = await fetch('/api/admin/import-top-400', { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        alert('🚀 Top 400 import started in background! Check Live Console Logs tab for real-time progress.');
+      }
+      setTimeout(() => {
+        el.btnImportTop400.disabled = false;
+        el.btnImportTop400.textContent = '⚡ Import Top 400 (5m)';
+      }, 4000);
     });
   }
 
