@@ -150,13 +150,13 @@ app.delete('/api/strategies/:id', async (req, res) => {
   }
 });
 
-// Admin: Import Top 400 Symbols
-app.post('/api/admin/import-top-400', async (req, res) => {
+// Admin: Import Top 500 Symbols (1,000 Strategies across 5m & 15m)
+app.post('/api/admin/import-top-500', async (req, res) => {
   try {
-    const importTop400 = require('../scripts/import_top_400_symbols');
+    const importTop500 = require('../scripts/import_top_500_symbols');
     // Run async in background
-    importTop400().catch(err => console.error('Background import top 400 error:', err));
-    res.json({ success: true, message: 'Top 400 Binance Futures import started in background.' });
+    importTop500(true).catch(err => console.error('Background import top 500 error:', err));
+    res.json({ success: true, message: 'Top 500 Binance Futures (5m & 15m) import started in background.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

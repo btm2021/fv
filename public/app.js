@@ -64,7 +64,7 @@ function initDom() {
 
   el.badgeActivePositions = document.getElementById('badgeActivePositions');
   el.badgeWhitelistCount = document.getElementById('badgeWhitelistCount');
-  el.btnImportTop400 = document.getElementById('btnImportTop400');
+  el.btnImportTop500 = document.getElementById('btnImportTop500');
 
   // Chart elements
   el.chartSymbolSelect = document.getElementById('chartSymbolSelect');
@@ -269,8 +269,9 @@ function updateHeaderMetrics() {
   const isScanning = state.status && state.status.isRunning;
   if (el.scannerStatusPill) {
     if (isScanning) {
+      const bucketText = state.status.currentBucket ? ` [Bucket ${state.status.currentBucket}/5 • 200/min]` : '';
       el.scannerStatusPill.className = 'status-pill active';
-      el.scannerStatusPill.innerHTML = '<span class="pulse-dot"></span> RUNNING';
+      el.scannerStatusPill.innerHTML = `<span class="pulse-dot"></span> RUNNING${bucketText}`;
       if (el.btnToggleScanner) el.btnToggleScanner.innerHTML = '<span>⏸️ Pause</span>';
     } else {
       el.scannerStatusPill.className = 'status-pill paused';
@@ -1081,20 +1082,20 @@ function initEventListeners() {
     });
   }
 
-  // Import Top 400
-  if (el.btnImportTop400) {
-    el.btnImportTop400.addEventListener('click', async () => {
-      if (!confirm('Start fetching and importing Top 400 Binance Futures pairs on 5m timeframe?')) return;
-      el.btnImportTop400.disabled = true;
-      el.btnImportTop400.textContent = '⏳ Importing Top 400...';
-      const res = await fetch('/api/admin/import-top-400', { method: 'POST' }).then(r => r.json());
+  // Import Top 500 (5m & 15m)
+  if (el.btnImportTop500) {
+    el.btnImportTop500.addEventListener('click', async () => {
+      if (!confirm('Start fetching and importing Top 500 Binance Futures pairs across 5m & 15m (1,000 strategies)?')) return;
+      el.btnImportTop500.disabled = true;
+      el.btnImportTop500.textContent = '⏳ Seeding Top 500...';
+      const res = await fetch('/api/admin/import-top-500', { method: 'POST' }).then(r => r.json());
       if (res.success) {
-        alert('🚀 Top 400 import started in background! Check Live Console Logs tab for real-time progress.');
+        alert('🚀 Top 500 (1,000 strategies 5m/15m) import started in background! Check Live Console Logs tab for real-time progress.');
       }
       setTimeout(() => {
-        el.btnImportTop400.disabled = false;
-        el.btnImportTop400.textContent = '⚡ Import Top 400 (5m)';
-      }, 4000);
+        el.btnImportTop500.disabled = false;
+        el.btnImportTop500.textContent = '⚡ Re-Seed Top 500 (5m & 15m)';
+      }, 5000);
     });
   }
 

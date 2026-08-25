@@ -5,6 +5,7 @@
   "main": "smc.js",
   "scripts": {
     "start": "node server.js",
+    "import:top500": "node scripts/import_top_500_symbols.js",
     "import:top400": "node scripts/import_top_400_symbols.js",
     "test": "node test_smc_node.js",
     "example": "node example_usage.js"
