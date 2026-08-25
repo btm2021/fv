@@ -4,6 +4,7 @@
   "description": "Smart Money Concepts (SMC) Indicator Library - Pure JavaScript & Node.js 1:1 Port of joshyattridge/smart-money-concepts",
   "main": "smc.js",
   "scripts": {
+    "start": "node server.js",
     "test": "node test_smc_node.js",
     "example": "node example_usage.js"
   },
