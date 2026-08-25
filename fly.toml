@@ -1,31 +1,33 @@
-# fly.toml app configuration file for 24/7 SMC Quantum Trading Hub
-# Single persistent Node.js machine deployment (256MB RAM, pure Node.js runtime)
+# fly.toml app configuration file generated for fv-bv on 2026-08-25T10:22:20Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "quantum-smc-trading-hub"
-primary_region = "sin"
+app = 'fv-bv'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = "production"
-  PORT = "3000"
-  NODE_OPTIONS = "--max-old-space-size=192"
+  NODE_ENV = 'production'
+  NODE_OPTIONS = '--max-old-space-size=192'
+  PORT = '3000'
+
+[[mounts]]
+  source = 'trading_data'
+  destination = '/app/data'
+  initial_size = '1gb'
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
-  processes = ["app"]
-
-[mounts]
-  source = "trading_data"
-  destination = "/app/data"
-  initial_size = "1gb"
+  processes = ['app']
 
 [[vm]]
-  cpu_kind = "shared"
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256
