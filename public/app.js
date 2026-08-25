@@ -790,21 +790,28 @@ function renderChartCanvas() {
   if (!canvas || !el.chartViewport) return;
 
   const rect = el.chartViewport.getBoundingClientRect();
-  const vWidth = el.chartViewport.clientWidth || rect.width || 1200;
-  const vHeight = el.chartViewport.clientHeight || rect.height || 600;
+  const vWidth = Math.floor(rect.width || el.chartViewport.clientWidth || 360);
+  const vHeight = Math.floor(rect.height || el.chartViewport.clientHeight || 380);
 
-  canvas.width = Math.max(vWidth, 600);
-  canvas.height = Math.max(vHeight, 400);
+  // High DPI / Retina support for crisp rendering on mobile and PC
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(vWidth * dpr);
+  canvas.height = Math.floor(vHeight * dpr);
+  canvas.style.width = `${vWidth}px`;
+  canvas.style.height = `${vHeight}px`;
 
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, vWidth, vHeight);
 
   const candles = state.chart.candles;
   if (!candles || candles.length === 0) {
     ctx.fillStyle = '#64748b';
-    ctx.font = '14px Inter, sans-serif';
+    ctx.font = '13px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Syncing live candles from Binance Futures...', canvas.width / 2, canvas.height / 2);
+    ctx.fillText('Syncing live candles from Binance Futures...', vWidth / 2, vHeight / 2);
+    ctx.restore();
     return;
   }
 
@@ -817,8 +824,10 @@ function renderChartCanvas() {
   const maxPan = Math.max(0, totalCount - 15);
   state.chart.panOffset = Math.max(minPan, Math.min(maxPan, state.chart.panOffset || 0));
 
-  const chartWidth = canvas.width - 95;
-  const chartLeft = 15;
+  const isMobile = vWidth < 550;
+  const rightAxisWidth = isMobile ? 68 : 88;
+  const chartLeft = isMobile ? 6 : 14;
+  const chartWidth = Math.max(100, vWidth - chartLeft - rightAxisWidth);
   const barW = Math.max(2, chartWidth / vCount);
 
   // Collect visible candles within viewport range
@@ -830,7 +839,10 @@ function renderChartCanvas() {
     }
   }
 
-  if (visibleCandles.length === 0) return;
+  if (visibleCandles.length === 0) {
+    ctx.restore();
+    return;
+  }
 
   const fromTime = visibleCandles[0].time;
   const toTime = visibleCandles[visibleCandles.length - 1].time;
@@ -846,8 +858,8 @@ function renderChartCanvas() {
   maxPrice += priceMargin;
 
   const priceRange = maxPrice - minPrice || 1;
-  const chartHeight = canvas.height - 65;
-  const chartTop = 15;
+  const chartHeight = Math.max(150, vHeight - 50);
+  const chartTop = 12;
   const getY = (p) => chartTop + chartHeight - ((p - minPrice) / priceRange) * chartHeight;
 
   const tfSec = getTfSeconds(state.chart.timeframe);
@@ -994,6 +1006,8 @@ function renderChartCanvas() {
       updateChartHud(visibleCandles[visibleCandles.length - 1]);
     }
   }
+
+  ctx.restore();
 }
 
 function updateChartHud(c) {
@@ -1258,7 +1272,77 @@ function initEventListeners() {
       state.chart.visibleCount = Math.max(20, Math.min(450, curZoom + zoomDelta));
       renderChartCanvas();
     }, { passive: false });
+
+    // 5. Mobile Touch Handlers (1-finger pan/tap & 2-finger pinch-zoom)
+    let touchStartDist = 0;
+    let touchStartZoom = 90;
+
+    el.liveChartCanvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        const rect = el.liveChartCanvas.getBoundingClientRect();
+        const touchX = e.touches[0].clientX - rect.left;
+        const touchY = e.touches[0].clientY - rect.top;
+
+        // Check card tap
+        if (typeof Stat2BoxStrategyIndicator !== 'undefined') {
+          const card = Stat2BoxStrategyIndicator.findCardAt(touchX, touchY);
+          if (card) {
+            openDecisionModal(card);
+            return;
+          }
+        }
+
+        state.chart.isDragging = true;
+        state.chart.dragStartX = touchX;
+        state.chart.dragStartPan = state.chart.panOffset || 0;
+      } else if (e.touches.length === 2) {
+        state.chart.isDragging = false;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        touchStartDist = Math.sqrt(dx * dx + dy * dy);
+        touchStartZoom = state.chart.visibleCount || 90;
+      }
+    }, { passive: true });
+
+    el.liveChartCanvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && state.chart.isDragging) {
+        const rect = el.liveChartCanvas.getBoundingClientRect();
+        const touchX = e.touches[0].clientX - rect.left;
+        const dx = touchX - state.chart.dragStartX;
+        const chartWidth = Math.max(100, (rect.width || 360) - 95);
+        const barW = Math.max(2, chartWidth / (state.chart.visibleCount || 90));
+        const barsMoved = Math.round(dx / barW);
+
+        const totalCount = (state.chart.candles || []).length;
+        const vCount = Math.max(15, Math.min(state.chart.visibleCount || 90, totalCount));
+        const minPan = -Math.round(vCount * 0.85);
+        const maxPan = Math.max(0, totalCount - 15);
+
+        state.chart.panOffset = Math.max(minPan, Math.min(maxPan, state.chart.dragStartPan + barsMoved));
+        renderChartCanvas();
+      } else if (e.touches.length === 2 && touchStartDist > 0) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const curDist = Math.sqrt(dx * dx + dy * dy);
+        const scale = touchStartDist / curDist;
+        const newZoom = Math.round(touchStartZoom * scale);
+        state.chart.visibleCount = Math.max(20, Math.min(450, newZoom));
+        renderChartCanvas();
+      }
+    }, { passive: true });
+
+    el.liveChartCanvas.addEventListener('touchend', () => {
+      state.chart.isDragging = false;
+      touchStartDist = 0;
+    });
   }
+
+  // Window Resize Auto-Refit for PC, Tablet and Mobile
+  window.addEventListener('resize', () => {
+    if (state.activeTab === 'tabChart' || el.liveChartCanvas) {
+      renderChartCanvas();
+    }
+  });
 
   // Settings Form Submit
   if (el.formBotSettings) {
