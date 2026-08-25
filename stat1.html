@@ -1413,6 +1413,12 @@
     </div>
 
     <div class="header-right">
+      <!-- Switch to STAT2 Pro Box -->
+      <a href="stat2.html" class="btn-action" style="border-color: #10b981; color: #34d399; text-decoration: none;" title="Switch to STAT2 Pro Box Strategy (HUD Trade Cards)">
+        <span>📦</span>
+        <span>STAT2 Pro Box</span>
+      </a>
+
       <!-- TradingView-Style Replay Button -->
       <button class="btn-action" id="btnOpenReplay" style="border-color: #6366f1; color: #a5b4fc;" title="Bar Replay Mode (Cut history & step forward)">
         <span class="replay-icon">⏪</span>
@@ -1562,9 +1568,37 @@
     </div>
   </div>
 
+  <!-- 6. Trade Decision & Forensics Modal -->
+  <div class="symbol-modal-backdrop" id="tradeDecisionModal" style="display:none; z-index: 9999;">
+    <div class="symbol-modal-box" style="max-width: 580px; width: 92vw; background: #0f172a; border: 1px solid #334155; box-shadow: 0 20px 50px rgba(0,0,0,0.8); border-radius: 12px; overflow: hidden; max-height: 88vh; display: flex; flex-direction: column;">
+      <!-- Header -->
+      <div style="padding: 14px 20px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; background: #1e293b;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span id="tdModalBadge" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 6px;">▲ BUY TREND</span>
+          <span id="tdModalSymbol" style="font-weight: 700; font-size: 15px; color: #f8fafc;">BTCUSDT • 5m</span>
+        </div>
+        <button class="btn-close" id="btnCloseTradeDecisionModal" style="background: none; border: none; color: #94a3b8; font-size: 18px; cursor: pointer;">✕</button>
+      </div>
+
+      <!-- Body Content -->
+      <div style="padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; font-size: 13px; color: #cbd5e1; line-height: 1.6;" id="tradeDecisionModalBody">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Footer -->
+      <div style="padding: 12px 20px; border-top: 1px solid #1e293b; background: #090d16; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace;">🛡️ 100% Causal Real-Time (Zero Look-Ahead Bias)</span>
+        <button class="btn-primary" id="btnOkTradeDecisionModal" style="padding: 6px 16px; font-size: 12px;">Đã Hiểu / Đóng</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modular Indicators Suite -->
   <script src="indicators/registry.js"></script>
   <script src="indicators/indicator_atrbot.js"></script>
+  <script src="indicators/indicator_atrbot_liq_strategy.js"></script>
+  <script src="indicators/indicator_stat1_pro_strategy.js"></script>
+  <script src="indicators/indicator_stat2_box_strategy.js"></script>
   <script src="indicators/indicator_smc.js"></script>
   <script src="indicators/indicator_vsr.js"></script>
   <script src="indicators/indicator_ema.js"></script>

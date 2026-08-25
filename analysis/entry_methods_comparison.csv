@@ -1,0 +1,5 @@
+entry_method,total_signals,filled,fill_rate_pct,wins,loses,winrate_filled_pct,avg_entry_improvement_pct
+market,950,950,100.0,668,282,70.3,0.0
+retest_fvg,773,418,54.1,289,129,69.1,0.372
+retest_trail2,950,13,1.4,8,5,61.5,1.599
+retest_ob_mid,57,3,5.3,1,2,33.3,0.245

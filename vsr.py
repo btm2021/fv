@@ -1,10 +1,19 @@
 """
 Volume Spike Reversal (VSR) Indicator (Python)
-Converted 1:1 from vsr.js
+Matches 1:1 with vsr.js / TradingView Pine Script
+Detects institutional volume spikes and creates dynamic reversal zones
 """
 
+import sys
 import numpy as np
 import pandas as pd
+
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 
 def calculate_vsr(
     df: pd.DataFrame,
@@ -14,7 +23,7 @@ def calculate_vsr(
     """
     Calculate VSR (Volume Spike Reversal) levels and zones.
     Parameters:
-        df: DataFrame with 'high', 'low', 'close', 'volume', 'time'
+        df: DataFrame with 'high', 'low', 'close', 'volume', 'time' (or 'timestamp')
         length: Volume SD length (default 10)
         threshold: Volume spike threshold (default 10.0)
     Returns:
@@ -28,9 +37,10 @@ def calculate_vsr(
     lows = df['low'].astype(float).values
     closes = df['close'].astype(float).values
     volumes = df['volume'].astype(float).values
-    
-    if 'time' in df.columns:
-        times_raw = df['time'].values
+
+    time_col = 'time' if 'time' in df.columns else ('timestamp' if 'timestamp' in df.columns else None)
+    if time_col:
+        times_raw = df[time_col].values
         times = (times_raw // 1000).astype(int) if times_raw[0] > 1e11 else times_raw.astype(int)
     else:
         times = np.arange(n)
@@ -95,11 +105,33 @@ def calculate_vsr(
         prev_stdev = stdev
 
         results.append({
-            'upper': round(vsr_upper, 2) if not np.isnan(vsr_upper) else None,
-            'lower': round(vsr_lower, 2) if not np.isnan(vsr_lower) else None,
+            'upper': round(vsr_upper, 4) if not np.isnan(vsr_upper) else None,
+            'lower': round(vsr_lower, 4) if not np.isnan(vsr_lower) else None,
             'signal': round(signal, 4),
             'isSpike': bool(is_spike),
             'time': t
         })
 
     return results
+
+
+def calculate_vsr_df(
+    df: pd.DataFrame,
+    length: int = 10,
+    threshold: float = 10.0
+) -> pd.DataFrame:
+    """
+    Calculate VSR and return as pandas DataFrame aligned with input df
+    """
+    raw_list = calculate_vsr(df, length=length, threshold=threshold)
+    if not raw_list:
+        return pd.DataFrame(columns=[
+            'vsr_upper', 'vsr_lower', 'vsr_signal', 'vsr_spike'
+        ])
+
+    return pd.DataFrame({
+        'vsr_upper': [r['upper'] for r in raw_list],
+        'vsr_lower': [r['lower'] for r in raw_list],
+        'vsr_signal': [r['signal'] for r in raw_list],
+        'vsr_spike': [r['isSpike'] for r in raw_list]
+    }, index=df.index)

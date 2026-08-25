@@ -1,0 +1,81 @@
+================================================================================
+  LIQUIDITY ZONE FILTER ANALYSIS — ATRBot Lose Prevention
+================================================================================
+  Total trades   : 1531
+  Wins           : 888 (58.0%)
+  Loses          : 643 (42.0%)
+  Baseline WR    : 58.0%
+
+================================================================================
+  A. LIQUIDITY ZONE PRESENCE AT SIGNAL BARS
+================================================================================
+  Has danger liq zone (any dist)    :  1382 trades | WR:  58.0%
+  No danger liq zone                :   149 trades | WR:  57.7%
+  Safe liq present (helper)         :  1321 trades | WR:  55.0%
+  Liq ratio risky (danger < safe)   :   858 trades | WR:  48.4%
+
+================================================================================
+  B. LOSE RATE BY DANGER LIQ DISTANCE FROM ENTRY
+================================================================================
+  Danger Dist to Liq           |  Total |   Wins |  Loses |  WinRate |  vs Baseline
+  ------------------------------------------------------------------------
+  Danger liq < 0.5%            |    181 |     53 |    128 |    29.3% |       -28.7%
+  Danger liq 0.5%-1.0%         |    221 |     90 |    131 |    40.7% |       -17.3%
+  Danger liq 1.0%-1.5%         |    178 |     77 |    101 |    43.3% |       -14.7%
+  Danger liq 1.5%-2.0%         |    144 |     80 |     64 |    55.6% |        -2.4%
+  Danger liq 2.0%-3.0%         |    177 |    126 |     51 |    71.2% |       +13.2%
+  Danger liq > 3.0%            |    481 |    376 |    105 |    78.2% |       +20.2%
+  No danger liq                |    149 |     86 |     63 |    57.7% |        -0.3%
+
+================================================================================
+  C. THRESHOLD SWEEP — Impact of Filtering by Danger Liq Distance
+================================================================================
+  Filter Threshold     |   Kept |  Kept% |  WR After |  Improvement |  Filtered WR
+  ---------------------------------------------------------------------------
+  < 0.5% danger liq    |   1350 |  88.2% |     61.9% |        +3.9% |        29.3%
+  < 1.0% danger liq    |   1129 |  73.7% |     66.0% |        +8.0% |        35.6%
+  < 1.5% danger liq    |    951 |  62.1% |     70.2% |       +12.2% |        37.9%
+  < 2.0% danger liq    |    807 |  52.7% |     72.9% |       +14.9% |        41.4%
+  < 3.0% danger liq    |    630 |  41.1% |     73.3% |       +15.3% |        47.3%
+
+================================================================================
+  D. COMBINED FILTER — Danger Liq + Ratio (danger closer than safe)
+================================================================================
+  Combined filter: danger_liq_close=True AND liq_ratio < 1.0
+  Trades kept   : 1041 (68.0%)
+  Trades removed: 490 (32.0%)
+  WR (kept)     : 68.7%  (baseline: 58.0%  | improvement: +10.7%)
+  WR (filtered) : 35.3%  (these were indeed mostly loses)
+
+================================================================================
+  E. PER-SYMBOL RESULT WITH DEFAULT FILTER (danger liq < 1.5%)
+================================================================================
+  Symbol       |   All WR |   Kept |  Kept WR |     Impr | Removed |  Removed WR
+  ------------------------------------------------------------------------
+  ADAUSDT      |    63.6% |    105 |    71.4% |    +7.8% |      38 |       42.1%
+  AVAXUSDT     |    59.6% |    114 |    71.9% |   +12.3% |      52 |       32.7%
+  BNBUSDT      |    50.0% |     82 |    68.3% |   +18.3% |      80 |       31.2%
+  BTCUSDT      |    52.0% |     83 |    65.1% |   +13.1% |      67 |       35.8%
+  DOGEUSDT     |    60.1% |     97 |    69.1% |    +8.9% |      56 |       44.6%
+  ETHUSDT      |    59.6% |     88 |    75.0% |   +15.4% |      58 |       36.2%
+  LINKUSDT     |    54.6% |     99 |    71.7% |   +17.1% |      64 |       28.1%
+  NEARUSDT     |    69.3% |    109 |    76.2% |    +6.9% |      31 |       45.2%
+  SOLUSDT      |    59.1% |     88 |    68.2% |    +9.1% |      66 |       47.0%
+  XRPUSDT      |    53.9% |     86 |    62.8% |    +8.9% |      68 |       42.6%
+
+================================================================================
+  F. CONCLUSIONS — Liquidity Zone as a Lose Filter
+================================================================================
+  Best single threshold : 3.0%  →  WR: 73.3%  (+15.3%)
+  Trades kept           : 630 / 1531 (41.1%)
+  Removed trades WR     : 47.3%  ← mostly loses
+
+  HOW TO USE THE FILTER IN PRODUCTION:
+  1. At ATRBot signal, scan all ACTIVE (unswept) liquidity zones
+  2. For BUY: check if any BSL (Buy Side Liq) is within 1.5% ABOVE entry
+     → If YES: SKIP the trade (market will likely sweep BSL then drop)
+  3. For SELL: check if any SSL (Sell Side Liq) is within 1.5% BELOW entry
+     → If YES: SKIP the trade (market will likely sweep SSL then pump)
+  4. BONUS: If safe liq (helping direction) < danger liq distance → take trade
+
+================================================================================

@@ -624,112 +624,31 @@
     const data = normalizeOHLCV(ohlc);
     const n = data.length;
 
-    let overallHigh = -Infinity;
-    let overallLow = Infinity;
-    for (let i = 0; i < n; i++) {
-      if (data[i].high > overallHigh) overallHigh = data[i].high;
-      if (data[i].low < overallLow) overallLow = data[i].low;
-    }
-    const pipRange = (overallHigh - overallLow) * rangePercent;
-
-    const shlHL = new Array(n);
-    const shlLevel = new Array(n);
-    for (let i = 0; i < n; i++) {
-      shlHL[i] = swingHighsLowsData[i].HighLow;
-      shlLevel[i] = swingHighsLowsData[i].Level;
-    }
-
     const liqArr = new Array(n).fill(null);
     const liqLevel = new Array(n).fill(null);
     const liqEnd = new Array(n).fill(null);
     const liqSwept = new Array(n).fill(null);
 
-    const bullIndices = [];
     for (let i = 0; i < n; i++) {
-      if (shlHL[i] === 1) bullIndices.push(i);
-    }
+      const shl = swingHighsLowsData[i];
+      if (!shl || shl.HighLow === null || shl.Level === null || isNaN(shl.Level)) continue;
 
-    for (let b = 0; b < bullIndices.length; b++) {
-      const i = bullIndices[b];
-      if (shlHL[i] !== 1) continue;
-
-      const highLevel = shlLevel[i];
-      const rangeLow = highLevel - pipRange;
-      const rangeHigh = highLevel + pipRange;
-      const groupLevels = [highLevel];
-      let groupEnd = i;
+      const isBull = shl.HighLow === 1;
+      const level = Number(shl.Level);
 
       let swept = 0;
       for (let j = i + 1; j < n; j++) {
-        if (data[j].high >= rangeHigh) {
-          swept = j;
-          break;
+        if (isBull) {
+          if (data[j].high >= level) { swept = j; break; }
+        } else {
+          if (data[j].low <= level) { swept = j; break; }
         }
       }
 
-      for (let k = 0; k < bullIndices.length; k++) {
-        const j = bullIndices[k];
-        if (j <= i) continue;
-        if (swept > 0 && j >= swept) break;
-
-        if (shlHL[j] === 1 && shlLevel[j] >= rangeLow && shlLevel[j] <= rangeHigh) {
-          groupLevels.push(shlLevel[j]);
-          groupEnd = j;
-          shlHL[j] = 0;
-        }
-      }
-
-      if (groupLevels.length > 1) {
-        const avgLevel = groupLevels.reduce((acc, v) => acc + v, 0) / groupLevels.length;
-        liqArr[i] = 1;
-        liqLevel[i] = avgLevel;
-        liqEnd[i] = groupEnd;
-        liqSwept[i] = swept;
-      }
-    }
-
-    const bearIndices = [];
-    for (let i = 0; i < n; i++) {
-      if (shlHL[i] === -1) bearIndices.push(i);
-    }
-
-    for (let b = 0; b < bearIndices.length; b++) {
-      const i = bearIndices[b];
-      if (shlHL[i] !== -1) continue;
-
-      const lowLevel = shlLevel[i];
-      const rangeLow = lowLevel - pipRange;
-      const rangeHigh = lowLevel + pipRange;
-      const groupLevels = [lowLevel];
-      let groupEnd = i;
-
-      let swept = 0;
-      for (let j = i + 1; j < n; j++) {
-        if (data[j].low <= rangeLow) {
-          swept = j;
-          break;
-        }
-      }
-
-      for (let k = 0; k < bearIndices.length; k++) {
-        const j = bearIndices[k];
-        if (j <= i) continue;
-        if (swept > 0 && j >= swept) break;
-
-        if (shlHL[j] === -1 && shlLevel[j] >= rangeLow && shlLevel[j] <= rangeHigh) {
-          groupLevels.push(shlLevel[j]);
-          groupEnd = j;
-          shlHL[j] = 0;
-        }
-      }
-
-      if (groupLevels.length > 1) {
-        const avgLevel = groupLevels.reduce((acc, v) => acc + v, 0) / groupLevels.length;
-        liqArr[i] = -1;
-        liqLevel[i] = avgLevel;
-        liqEnd[i] = groupEnd;
-        liqSwept[i] = swept;
-      }
+      liqArr[i] = isBull ? 1 : -1;
+      liqLevel[i] = level;
+      liqEnd[i] = swept > 0 ? swept : n - 1;
+      liqSwept[i] = swept;
     }
 
     const result = new Array(n);

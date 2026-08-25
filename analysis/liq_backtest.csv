@@ -1,0 +1,6 @@
+threshold_pct,total_trades,taken,filtered,taken_wins,taken_loses,filtered_wins,filtered_loses,baseline_winrate,taken_winrate,filtered_winrate,winrate_improvement,trades_kept_pct
+0.5,1531,1350,181,835,515,53,128,58.0,61.85,29.28,3.85,88.2
+1.0,1531,1129,402,745,384,143,259,58.0,65.99,35.57,7.99,73.7
+1.5,1531,951,580,668,283,220,360,58.0,70.24,37.93,12.24,62.1
+2.0,1531,807,724,588,219,300,424,58.0,72.86,41.44,14.86,52.7
+3.0,1531,630,901,462,168,426,475,58.0,73.33,47.28,15.33,41.1
