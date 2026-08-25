@@ -2,7 +2,7 @@ const { server } = require('./server/app');
 const scanner = require('./server/scanner');
 const binanceWs = require('./server/binanceWs');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 server.listen(PORT, () => {
   console.log(`\n══════════════════════════════════════════════════════════════════════`);
