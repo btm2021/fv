@@ -6,6 +6,19 @@ const SMC = require('../smc.js');
 const Stat2Box = require('../indicators/indicator_stat2_box_strategy.js');
 
 class StrategyEngine {
+  getTfSeconds(tf) {
+    if (!tf) return 300;
+    if (tf === '1m') return 60;
+    if (tf === '3m') return 180;
+    if (tf === '5m') return 300;
+    if (tf === '15m') return 900;
+    if (tf === '30m') return 1800;
+    if (tf === '1h') return 3600;
+    if (tf === '4h') return 14400;
+    if (tf === '1d') return 86400;
+    return 300;
+  }
+
   /**
    * Evaluates a strategy configuration on a series of OHLCV candles
    * Returns signal result if the latest closed candle produced a valid actionable signal
@@ -38,6 +51,16 @@ class StrategyEngine {
     const latestCard = calcResult.cards.find(c => c.barIndex === lastBarIdx || c.barIndex === lastBarIdx + 1);
 
     if (!latestCard) {
+      return null;
+    }
+
+    // STRICT FRESHNESS FILTER:
+    // Only fire live actionable signals if the signal candle occurred within the current live bar window!
+    const tfSec = this.getTfSeconds(strategyConfig.timeframe);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const candleAgeSec = nowSec - latestCard.time;
+    if (candleAgeSec > tfSec * 2.0) {
+      // Stale historical card (e.g. from hours or days ago) - DO NOT execute live order!
       return null;
     }
 

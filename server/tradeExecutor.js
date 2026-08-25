@@ -40,6 +40,32 @@ class TradeExecutor {
     const quantity = posSizeUsd / signal.entry_price;
     const feeUsd = posSizeUsd * 0.0005; // 0.05% Taker entry fee
 
+    // Safety Check: Validate against live Binance WebSocket price before entering
+    const binanceWs = require('./binanceWs');
+    const livePrice = binanceWs.getLivePrice ? binanceWs.getLivePrice(signal.symbol) : null;
+    if (livePrice) {
+      const isLong = signal.direction === 'BUY';
+      const slippage = Math.abs(livePrice - signal.entry_price) / signal.entry_price;
+
+      // 1. If live market price is already past Stop Loss, REJECT
+      if ((isLong && livePrice <= signal.sl_price) || (!isLong && livePrice >= signal.sl_price)) {
+        logger.warn('TRADE', `⚠️ [REJECTED] ${signal.symbol} live price ($${livePrice}) is already past Stop-Loss ($${signal.sl_price}). Entry aborted.`);
+        return null;
+      }
+
+      // 2. If live market price has already hit TP1, REJECT
+      if ((isLong && livePrice >= signal.tp1_price) || (!isLong && livePrice <= signal.tp1_price)) {
+        logger.warn('TRADE', `⚠️ [REJECTED] ${signal.symbol} live price ($${livePrice}) has already hit TP1 ($${signal.tp1_price}). Entry aborted.`);
+        return null;
+      }
+
+      // 3. If price slipped more than 0.5% from signal entry, REJECT
+      if (slippage > 0.005) {
+        logger.warn('TRADE', `⚠️ [REJECTED] ${signal.symbol} live price ($${livePrice}) has slipped ${(slippage * 100).toFixed(2)}% from signal entry ($${signal.entry_price}).`);
+        return null;
+      }
+    }
+
     const posId = await DB.createPosition({
       symbol: signal.symbol,
       strategy_id: signal.strategy_id,

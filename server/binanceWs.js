@@ -109,6 +109,11 @@ class BinanceWsManager {
     }
   }
 
+  getLivePrice(symbol) {
+    if (!symbol) return null;
+    return this.livePriceMap[symbol.toUpperCase()] || null;
+  }
+
   getActivePriceSubset(positions) {
     const subset = {};
     if (positions && Array.isArray(positions)) {
