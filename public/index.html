@@ -118,6 +118,11 @@
                 <span class="pill-count" id="subCountSignals">0</span>
               </button>
             </div>
+            <div class="subnav-actions">
+              <button class="btn btn-danger btn-sm" id="btnResetOrdersAndPnL" title="Wipe all positions & signals, reset balance back to $1,000">
+                <span>🗑️ Reset Orders & PnL</span>
+              </button>
+            </div>
           </div>
 
           <!-- SUB-TAB 1: ACTIVE POSITIONS -->
@@ -400,6 +405,26 @@
                 <button type="submit" class="btn btn-primary">💾 Save Configuration</button>
               </div>
             </form>
+
+            <!-- DANGER ZONE: RESET DATABASE -->
+            <div class="panel-card mt-4" style="border: 1px solid rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.04); border-radius: 8px; padding: 16px;">
+              <div class="card-header space-between" style="border-bottom: 1px solid rgba(244, 63, 94, 0.2); padding-bottom: 12px; margin-bottom: 12px;">
+                <div>
+                  <div class="card-title" style="color: #f43f5e; display: flex; align-items: center; gap: 8px;">
+                    <span>⚠️ Danger Zone — Database & Trade Reset</span>
+                  </div>
+                  <div class="card-subtitle" style="color: #cbd5e1;">Xóa sạch toàn bộ lịch sử lệnh, vị thế đang chạy, hoặc khôi phục cài đặt gốc toàn bộ Database</div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-danger" id="btnResetTradesOnly">
+                  <span>🗑️ Reset Orders & Signals (Khôi phục $1,000 Vốn)</span>
+                </button>
+                <button class="btn btn-danger" id="btnResetFactoryDb" style="background: #991b1b;">
+                  <span>⚡ Full Factory Reset (Xóa DB & Tải Lại 500 Symbol)</span>
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 

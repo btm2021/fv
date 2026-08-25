@@ -162,6 +162,39 @@ app.post('/api/admin/import-top-500', async (req, res) => {
   }
 });
 
+// Admin: Reset Trade Positions, Signals, and Equity to $1,000
+app.post('/api/admin/reset-trades', async (req, res) => {
+  try {
+    await DB.resetTradesAndSignals();
+    logger.warn('ADMIN', '🗑️ User executed RESET: Cleared all trade positions, signals, and reset equity to $1,000.00 USD.');
+    notification.broadcast('POSITIONS_UPDATE', {
+      positions: [],
+      stats: await DB.getPerformanceStats()
+    });
+    notification.broadcast('SIGNALS_UPDATE', { signals: [] });
+    res.json({ success: true, message: 'All trade positions and signals have been reset. Account balance reset to $1,000.00 USD.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin: Full Database Factory Reset
+app.post('/api/admin/reset-all', async (req, res) => {
+  try {
+    await DB.resetEntireDatabase();
+    const importTop500 = require('../scripts/import_top_500_symbols');
+    importTop500(false).catch(e => console.error(e));
+    logger.warn('ADMIN', '⚠️ User executed FULL FACTORY RESET: Cleared DB tables and re-seeding Top 500 symbols.');
+    notification.broadcast('POSITIONS_UPDATE', {
+      positions: [],
+      stats: await DB.getPerformanceStats()
+    });
+    res.json({ success: true, message: 'Full database reset completed. Top 500 symbols re-seeding in background.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 4. Signals & Alerts
 app.get('/api/signals', async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;

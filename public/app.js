@@ -123,6 +123,11 @@ function initDom() {
   el.modalDecisionBadge = document.getElementById('modalDecisionBadge');
   el.modalDecisionSymbol = document.getElementById('modalDecisionSymbol');
   el.modalDecisionBody = document.getElementById('modalDecisionBody');
+
+  // Reset Buttons
+  el.btnResetOrdersAndPnL = document.getElementById('btnResetOrdersAndPnL');
+  el.btnResetTradesOnly = document.getElementById('btnResetTradesOnly');
+  el.btnResetFactoryDb = document.getElementById('btnResetFactoryDb');
 }
 
 // ── WEBSOCKET LIVE STREAM ──
@@ -1096,6 +1101,64 @@ function initEventListeners() {
         el.btnImportTop500.disabled = false;
         el.btnImportTop500.textContent = '⚡ Re-Seed Top 500 (5m & 15m)';
       }, 5000);
+    });
+  }
+
+  // Reset Trades & Signals ($1,000 Equity)
+  const handleResetTrades = async () => {
+    const ok = confirm('⚠️ BẠN CÓ CHẮC CHẮN MUỐN RESET TOÀN BỘ LỆNH & TÍN HIỆU?\n\n• Toàn bộ vị thế Active, Limit, Closed sẽ bị xóa.\n• Toàn bộ Signals Feed sẽ bị xóa.\n• Vốn tài khoản và PnL sẽ được đặt lại về $1,000.00 USD ban đầu.');
+    if (!ok) return;
+
+    try {
+      const res = await fetch('/api/admin/reset-trades', { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        state.activePositions = [];
+        state.closedPositions = [];
+        state.limitOrders = [];
+        state.signals = [];
+        state.performance = {
+          total_trades: 0,
+          wins: 0,
+          losses: 0,
+          win_rate: 0,
+          profit_factor: 0,
+          net_profit_usd: 0,
+          current_equity_usd: 1000.00
+        };
+        updateDashboardUI();
+        alert('✅ ĐÃ RESET TOÀN BỘ LỆNH THÀNH CÔNG!\nSố dư tài khoản đã được khôi phục về $1,000.00 USD.');
+      } else {
+        alert(`❌ Lỗi reset: ${res.error}`);
+      }
+    } catch (err) {
+      alert(`❌ Lỗi kết nối: ${err.message}`);
+    }
+  };
+
+  if (el.btnResetOrdersAndPnL) el.btnResetOrdersAndPnL.addEventListener('click', handleResetTrades);
+  if (el.btnResetTradesOnly) el.btnResetTradesOnly.addEventListener('click', handleResetTrades);
+
+  // Full Database Factory Reset
+  if (el.btnResetFactoryDb) {
+    el.btnResetFactoryDb.addEventListener('click', async () => {
+      const ok = confirm('⚠️ CẢNH BÁO: BẠN CÓ CHẮC CHẮN MUỐN FACTORY RESET TOÀN BỘ DATABASE?\n\n• Toàn bộ Database SQLite (Lệnh, Nến, Cài đặt) sẽ bị xóa trắng.\n• Hệ thống sẽ tự động tải lại Top 500 Symbol và 1.000 Chiến lược 5m/15m mới.');
+      if (!ok) return;
+
+      try {
+        const res = await fetch('/api/admin/reset-all', { method: 'POST' }).then(r => r.json());
+        if (res.success) {
+          state.activePositions = [];
+          state.closedPositions = [];
+          state.limitOrders = [];
+          state.signals = [];
+          updateDashboardUI();
+          alert('🚀 ĐÃ TIẾN HÀNH FACTORY RESET!\nHệ thống đang tự động nạp mới 500 Symbol Binance Futures ngầm. Bạn có thể theo dõi trong Tab Live Console Logs.');
+        } else {
+          alert(`❌ Lỗi reset: ${res.error}`);
+        }
+      } catch (err) {
+        alert(`❌ Lỗi kết nối: ${err.message}`);
+      }
     });
   }
 

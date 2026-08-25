@@ -510,6 +510,33 @@ class DBManager {
       current_equity_usd: equity
     };
   }
+
+  // ── RESET OPERATIONS ──
+  async resetTradesAndSignals() {
+    await this.run('DELETE FROM trade_positions');
+    await this.run('DELETE FROM signals_alerts');
+    await this.setSetting('account_equity', '1000.00');
+    try {
+      await this.run('VACUUM');
+    } catch (e) {
+      // Non-blocking vacuum
+    }
+  }
+
+  async resetEntireDatabase() {
+    await this.run('DELETE FROM trade_positions');
+    await this.run('DELETE FROM signals_alerts');
+    await this.run('DELETE FROM ohlcv_candles');
+    await this.run('DELETE FROM symbol_strategies');
+    await this.run('DELETE FROM whitelist_symbols');
+    await this.setSetting('account_equity', '1000.00');
+    await this.setSetting('is_scanner_active', '1');
+    try {
+      await this.run('VACUUM');
+    } catch (e) {
+      // Non-blocking vacuum
+    }
+  }
 }
 
 module.exports = new DBManager();
