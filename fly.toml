@@ -1,5 +1,5 @@
 # fly.toml app configuration file for 24/7 SMC Quantum Trading Hub
-# Generated for single persistent machine deployment (24/7 background market scanner)
+# Single persistent Node.js machine deployment (256MB RAM, pure Node.js runtime)
 
 app = "quantum-smc-trading-hub"
 primary_region = "sin"
@@ -10,6 +10,7 @@ primary_region = "sin"
 [env]
   NODE_ENV = "production"
   PORT = "3000"
+  NODE_OPTIONS = "--max-old-space-size=192"
 
 [http_service]
   internal_port = 3000
