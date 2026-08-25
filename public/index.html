@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SMC + ATRBot 24/7 Quantum Trading Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- TOP NAVIGATION BAR -->
+    <header class="top-nav">
+      <div class="nav-brand">
+        <div class="brand-logo">⚡</div>
+        <div class="brand-text">
+          <div class="brand-title">SMC QUANTUM PRO</div>
+          <div class="brand-subtitle">24/7 Binance Futures Scanner & Execution Hub</div>
+        </div>
+      </div>
+
+      <!-- Quick Metrics Summary Bar -->
+      <div class="nav-metrics">
+        <div class="metric-item">
+          <span class="m-lbl">EQUITY</span>
+          <span class="m-val highlight" id="navEquity">$1,000.00</span>
+        </div>
+        <div class="metric-item">
+          <span class="m-lbl">WIN RATE</span>
+          <span class="m-val green" id="navWinRate">73.2%</span>
+        </div>
+        <div class="metric-item">
+          <span class="m-lbl">ACTIVE SYMBOLS</span>
+          <span class="m-val cyan" id="navActiveSymbols">10</span>
+        </div>
+        <div class="metric-item">
+          <span class="m-lbl">SCANNER</span>
+          <span class="status-pill active" id="scannerStatusPill">
+            <span class="pulse-dot"></span> RUNNING
+          </span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="nav-actions">
+        <button class="btn btn-primary" id="btnManualScan">
+          <span>⚡ Scan Now</span>
+        </button>
+        <button class="btn btn-secondary" id="btnToggleScanner">
+          <span>⏸️ Pause</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN BODY LAYOUT -->
+    <div class="main-layout">
+      <!-- SIDEBAR NAVIGATION -->
+      <aside class="sidebar">
+        <nav class="side-menu">
+          <button class="menu-tab active" data-tab="tabSignals">
+            <span class="tab-icon">📡</span>
+            <span class="tab-label">Signals & Positions</span>
+            <span class="tab-badge" id="badgeActivePositions">0</span>
+          </button>
+          <button class="menu-tab" data-tab="tabWhitelist">
+            <span class="tab-icon">🪙</span>
+            <span class="tab-label">Whitelist & Strategies</span>
+            <span class="tab-badge" id="badgeWhitelistCount">10</span>
+          </button>
+          <button class="menu-tab" data-tab="tabChart">
+            <span class="tab-icon">📊</span>
+            <span class="tab-label">Interactive Chart</span>
+          </button>
+          <button class="menu-tab" data-tab="tabLogs">
+            <span class="tab-icon">💻</span>
+            <span class="tab-label">Live Console Logs</span>
+            <span class="tab-badge green" id="badgeLogCount">0</span>
+          </button>
+          <button class="menu-tab" data-tab="tabSettings">
+            <span class="tab-icon">⚙️</span>
+            <span class="tab-label">Bot Configuration</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="engine-info">
+            <div>Engine: <span class="green">Causal SMC v2.7</span></div>
+            <div>Timeframe: <span class="cyan">5m Aligned</span></div>
+            <div>Look-Ahead: <span class="green">0.00% Verified</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CONTENT PANELS -->
+      <main class="content-area">
+
+        <!-- TAB 1: POSITIONS & ORDERS MANAGER -->
+        <section class="tab-panel active" id="tabSignals">
+          <!-- Position & Order Navigation Sub-Bar -->
+          <div class="pos-subnav-bar mb-3">
+            <div class="subnav-tabs">
+              <button class="subnav-btn active" data-subtab="subActivePositions">
+                <span>🟢 Active Positions</span>
+                <span class="pill-count" id="subCountActive">0</span>
+              </button>
+              <button class="subnav-btn" data-subtab="subLimitOrders">
+                <span>⏳ Pending Limit Orders</span>
+                <span class="pill-count" id="subCountLimit">0</span>
+              </button>
+              <button class="subnav-btn" data-subtab="subClosedHistory">
+                <span>📜 Closed History</span>
+                <span class="pill-count" id="subCountClosed">0</span>
+              </button>
+              <button class="subnav-btn" data-subtab="subSignalsFeed">
+                <span>⚡ Real-Time Signals Stream</span>
+                <span class="pill-count" id="subCountSignals">0</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- SUB-TAB 1: ACTIVE POSITIONS -->
+          <div class="subtab-content active" id="subActivePositions">
+            <div class="panel-card">
+              <div class="card-header space-between">
+                <div>
+                  <div class="card-title">
+                    <span class="icon">💼</span> Active Positions (1.0% Fixed Risk)
+                  </div>
+                  <div class="card-subtitle">Live trailing SL to Breakeven (+0.05%) upon TP1 • Click any position to view on STAT2 Chart</div>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table" id="tableActivePositions">
+                  <thead>
+                    <tr>
+                      <th>Symbol / TF</th>
+                      <th>Side</th>
+                      <th>Entry Price</th>
+                      <th>Current Price</th>
+                      <th>TP1 (50% + BE)</th>
+                      <th>TP2 (Liq Pool)</th>
+                      <th>Trailing Stop Loss</th>
+                      <th>Position Size</th>
+                      <th>Unrealized PnL</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbodyActivePositions">
+                    <tr><td colspan="11" class="text-center empty-state">No active positions open. Scanner is monitoring market 24/7...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-TAB 2: PENDING LIMIT ORDERS -->
+          <div class="subtab-content" id="subLimitOrders">
+            <div class="panel-card">
+              <div class="card-header space-between">
+                <div>
+                  <div class="card-title">
+                    <span class="icon">⏳</span> Pending Limit Orders (Fade Liquidity Traps)
+                  </div>
+                  <div class="card-subtitle">Orders waiting at Liquidity Pool levels • Click to inspect setup on STAT2 Chart</div>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table" id="tableLimitOrders">
+                  <thead>
+                    <tr>
+                      <th>Symbol / TF</th>
+                      <th>Side</th>
+                      <th>Limit Entry Price</th>
+                      <th>Current Market Price</th>
+                      <th>Distance to Entry</th>
+                      <th>TP1 Target</th>
+                      <th>TP2 Target</th>
+                      <th>Planned Stop Loss</th>
+                      <th>Planned Size ($)</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbodyLimitOrders">
+                    <tr><td colspan="10" class="text-center empty-state">No pending limit orders. Fade traps will register here automatically...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-TAB 3: CLOSED HISTORY -->
+          <div class="subtab-content" id="subClosedHistory">
+            <div class="panel-card">
+              <div class="card-header space-between">
+                <div>
+                  <div class="card-title">
+                    <span class="icon">📜</span> Closed Trade Records & Realized PnL
+                  </div>
+                  <div class="card-subtitle">Historical performance forensics & execution results</div>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="data-table" id="tableClosedPositions">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Entry Price</th>
+                      <th>Exit Price</th>
+                      <th>Exit Reason</th>
+                      <th>Net Realized PnL ($)</th>
+                      <th>ROI (%)</th>
+                      <th>Open Time</th>
+                      <th>Close Time</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbodyClosedPositions">
+                    <tr><td colspan="10" class="text-center empty-state">No closed trades recorded yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- SUB-TAB 4: REAL-TIME SIGNALS STREAM -->
+          <div class="subtab-content" id="subSignalsFeed">
+            <div class="panel-card">
+              <div class="card-header space-between">
+                <div>
+                  <div class="card-title">
+                    <span class="icon">⚡</span> 24/7 Detected Signal Stream
+                  </div>
+                  <div class="card-subtitle">Real-time actionable SMC + ATRBot signals • Click card to open STAT2 Chart & Forensics Modal</div>
+                </div>
+              </div>
+              <div class="signals-grid" id="signalsFeedGrid">
+                <!-- Dynamically populated Signal Cards -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 2: WHITELIST & MULTI-STRATEGY MANAGER -->
+        <section class="tab-panel" id="tabWhitelist">
+          <div class="panel-card">
+            <div class="card-header space-between">
+              <div>
+                <div class="card-title">🪙 Whitelist Symbol Entities & Strategy Manager</div>
+                <div class="card-subtitle">Each symbol is an entity with multiple customizable strategy layers</div>
+              </div>
+              <div class="header-btns">
+                <button class="btn btn-success" id="btnAddSymbolModalBtn">+ Add Symbol</button>
+              </div>
+            </div>
+
+            <!-- Whitelist Symbols Grid -->
+            <div class="whitelist-grid" id="whitelistEntityGrid">
+              <!-- Dynamically populated Whitelist cards with strategies -->
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 3: INTERACTIVE CHART VIEWER -->
+        <section class="tab-panel" id="tabChart">
+          <div class="panel-card chart-panel-card">
+            <div class="chart-top-bar">
+              <div class="chart-controls-left">
+                <select id="chartSymbolSelect" class="form-select"></select>
+                <select id="chartTimeframeSelect" class="form-select">
+                  <option value="1m">1m</option>
+                  <option value="3m">3m</option>
+                  <option value="5m" selected>5m</option>
+                  <option value="15m">15m</option>
+                  <option value="1h">1h</option>
+                </select>
+                <select id="chartModeSelect" class="form-select">
+                  <option value="dual" selected>Dual (Trend + Fade Liq)</option>
+                  <option value="trend_only">Trend Breakout Only</option>
+                  <option value="fade_only">Fade Liquidity Only</option>
+                </select>
+                <span class="chart-hint-pill">🖱️ Drag to Pan • Scroll to Zoom • Click Cards</span>
+              </div>
+              <div class="chart-controls-right">
+                <button class="btn btn-secondary btn-sm" id="btnResetChartZoom">🔍 Reset View</button>
+                <button class="btn btn-secondary btn-sm" id="btnReloadChart">🔄 Refresh</button>
+              </div>
+            </div>
+
+            <!-- Chart Hover OHLCV HUD bar -->
+            <div class="chart-hud-bar" id="chartHudBar">
+              <span id="hudSymbol" class="hud-item bold">BTCUSDT 5m</span>
+              <span class="hud-item">O: <b id="hudOpen">-</b></span>
+              <span class="hud-item">H: <b id="hudHigh">-</b></span>
+              <span class="hud-item">L: <b id="hudLow">-</b></span>
+              <span class="hud-item">C: <b id="hudClose">-</b></span>
+              <span class="hud-item">Vol: <b id="hudVol">-</b></span>
+              <span class="hud-item" id="hudChange">-</span>
+            </div>
+
+            <div class="chart-viewport" id="chartViewport">
+              <canvas id="liveChartCanvas"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 4: LIVE SYSTEM LOGS CONSOLE -->
+        <section class="tab-panel" id="tabLogs">
+          <div class="panel-card console-panel-card">
+            <div class="console-top-bar">
+              <div class="console-filters">
+                <button class="log-filter-btn active" data-filter="ALL">ALL (<span id="cntLogAll">0</span>)</button>
+                <button class="log-filter-btn" data-filter="SCANNER">SCANNER</button>
+                <button class="log-filter-btn" data-filter="SIGNAL">SIGNALS</button>
+                <button class="log-filter-btn" data-filter="TRADE">TRADES</button>
+                <button class="log-filter-btn" data-filter="TIMEFRAME">TIMEFRAME</button>
+                <button class="log-filter-btn" data-filter="WS">WEBSOCKET</button>
+              </div>
+              <div class="console-actions">
+                <label class="auto-scroll-label">
+                  <input type="checkbox" id="chkAutoScroll" checked> Auto-Scroll
+                </label>
+                <button class="btn btn-secondary btn-sm" id="btnCopyLogs">📋 Copy</button>
+                <button class="btn btn-danger btn-sm" id="btnClearLogs">🗑️ Clear</button>
+              </div>
+            </div>
+
+            <!-- TERMINAL STREAM BOX -->
+            <div class="terminal-box" id="terminalLogContainer">
+              <div class="terminal-body" id="terminalLogBody">
+                <!-- Dynamically populated real-time log lines -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB 5: BOT CONFIGURATION -->
+        <section class="tab-panel" id="tabSettings">
+          <div class="panel-card">
+            <div class="card-header">
+              <div class="card-title">⚙️ Bot Parameters & Capital Management Settings</div>
+              <div class="card-subtitle">Configure 1% Fixed Risk, Scanner depth, and Alert Webhooks</div>
+            </div>
+
+            <form id="formBotSettings" class="settings-form">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Initial Account Equity ($ USD)</label>
+                  <input type="number" id="cfgEquity" name="account_equity" class="form-input" value="1000" step="100">
+                  <small>Starting capital for position sizing calculations</small>
+                </div>
+
+                <div class="form-group">
+                  <label>Fixed Risk % Per Trade</label>
+                  <input type="number" id="cfgRiskPct" name="default_risk_pct" class="form-input" value="1.0" step="0.1">
+                  <small>Default capital % risked per Stop-Loss (e.g. 1.00%)</small>
+                </div>
+
+                <div class="form-group">
+                  <label>Candle Buffer Limit (Bars per Symbol)</label>
+                  <input type="number" id="cfgBufferLimit" name="candle_buffer_limit" class="form-input" value="1500" min="500" max="3000">
+                  <small>Maintains optimal 1,500 candle buffer in SQLite (0 rate-limit wastage)</small>
+                </div>
+
+                <div class="form-group">
+                  <label>Trading Execution Mode</label>
+                  <select id="cfgPaperMode" name="paper_trading_mode" class="form-select">
+                    <option value="1">Paper Trading (Simulated 100% Real-Time)</option>
+                    <option value="0">Live Binance Futures API</option>
+                  </select>
+                  <small>Simulates exact taker/maker fees & Breakeven SL trailing</small>
+                </div>
+              </div>
+
+              <div class="divider"></div>
+              <h3 class="section-title">🔔 Alert Channels (Telegram & Discord)</h3>
+
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Telegram Bot Token</label>
+                  <input type="text" id="cfgTgToken" name="telegram_bot_token" class="form-input" placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ">
+                </div>
+
+                <div class="form-group">
+                  <label>Telegram Chat ID</label>
+                  <input type="text" id="cfgTgChatId" name="telegram_chat_id" class="form-input" placeholder="-1001234567890">
+                </div>
+
+                <div class="form-group full-width">
+                  <label>Discord Webhook URL</label>
+                  <input type="text" id="cfgDiscordUrl" name="discord_webhook_url" class="form-input" placeholder="https://discord.com/api/webhooks/...">
+                </div>
+              </div>
+
+              <div class="form-actions mt-4">
+                <button type="submit" class="btn btn-primary">💾 Save Configuration</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <!-- MODAL: ADD SYMBOL TO WHITELIST -->
+    <div class="modal-overlay" id="modalAddSymbol">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title">🪙 Add Symbol to Whitelist</div>
+          <button class="modal-close" id="btnCloseAddSymbolModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Select Binance USDT Perpetual Pair</label>
+            <input type="text" id="inputNewSymbol" class="form-input" placeholder="e.g. BTCUSDT, SOLUSDT, PEPEUSDT" list="binanceSymbolsDatalist">
+            <datalist id="binanceSymbolsDatalist"></datalist>
+          </div>
+          <div class="form-group mt-3">
+            <label>Category / Tag</label>
+            <select id="selectNewCategory" class="form-select">
+              <option value="Top Vol">Top Volume</option>
+              <option value="Mid Vol">Mid Volume</option>
+              <option value="Meme">Meme Coin</option>
+              <option value="DeFi">DeFi</option>
+              <option value="Custom">Custom</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelAddSymbol">Cancel</button>
+          <button class="btn btn-primary" id="btnConfirmAddSymbol">Add Symbol Entity</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: EDIT STRATEGY -->
+    <div class="modal-overlay" id="modalEditStrategy">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div class="modal-title" id="editStrategyTitle">⚙️ Configure Strategy</div>
+          <button class="modal-close" id="btnCloseEditStratModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <form id="formEditStrategy">
+            <input type="hidden" id="stratId" name="id">
+            <input type="hidden" id="stratSymbol" name="symbol">
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Strategy Name</label>
+                <input type="text" id="stratName" name="strategy_name" class="form-input" required>
+              </div>
+
+              <div class="form-group">
+                <label>Strategy Mode</label>
+                <select id="stratType" name="strategy_type" class="form-select">
+                  <option value="dual">Dual (Trend Breakout + Fade Liquidity Trap)</option>
+                  <option value="trend_only">Trend Breakout Only</option>
+                  <option value="fade_only">Fade Liquidity Trap Only</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Timeframe</label>
+                <select id="stratTf" name="timeframe" class="form-select">
+                  <option value="1m">1m</option>
+                  <option value="3m">3m</option>
+                  <option value="5m" selected>5m (Optimal)</option>
+                  <option value="15m">15m</option>
+                  <option value="1h">1h</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Risk % per Trade</label>
+                <input type="number" id="stratRiskPct" name="risk_pct" class="form-input" value="1.0" step="0.1" min="0.1" max="10.0">
+              </div>
+
+              <div class="form-group">
+                <label>ATR Engine Multiplier (VIDYA)</label>
+                <input type="number" id="stratAtrMult" name="atr_mult" class="form-input" value="2.0" step="0.1">
+              </div>
+
+              <div class="form-group">
+                <label>Min ATR Volatility Threshold (%)</label>
+                <input type="number" id="stratMinAtr" name="min_atr_pct" class="form-input" value="0.35" step="0.05">
+              </div>
+
+              <div class="form-group">
+                <label>Liquidity Trap Filter (Distance %)</label>
+                <input type="number" id="stratLiqThresh" name="liq_threshold_pct" class="form-input" value="1.5" step="0.1">
+              </div>
+
+              <div class="form-group">
+                <label>Swing Lookback Pivot Length</label>
+                <input type="number" id="stratSwingLookback" name="swing_lookback" class="form-input" value="30" min="10" max="100">
+              </div>
+            </div>
+
+            <div class="modal-footer mt-4">
+              <button type="button" class="btn btn-secondary" id="btnCancelEditStrat">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save Strategy</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: TRADE DECISION FORENSICS -->
+    <div class="modal-overlay" id="modalTradeDecision">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span class="status-badge-lg" id="modalDecisionBadge">▲ BUY TREND</span>
+            <span style="font-weight: 700; color: #f8fafc; font-size: 15px;" id="modalDecisionSymbol">BTCUSDT • 5m</span>
+          </div>
+          <button class="modal-close" id="btnCloseDecisionModal">✕</button>
+        </div>
+        <div class="modal-body" id="modalDecisionBody">
+          <!-- Dynamic Content -->
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/smc.js"></script>
+  <script src="/indicators/indicator_stat2_box_strategy.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

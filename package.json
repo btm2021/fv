@@ -20,5 +20,12 @@
     "ict"
   ],
   "author": "Joshua Attridge (Original Python) / Ported to JS",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
+    "sql.js": "^1.14.2",
+    "sqlite3": "^6.0.1",
+    "ws": "^8.21.3"
+  }
 }

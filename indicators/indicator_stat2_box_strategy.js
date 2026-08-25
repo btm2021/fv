@@ -16,7 +16,7 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(require('../smc.js'), require('./registry.js'));
   } else {
-    factory(root.SMC, root.IndicatorRegistry);
+    root.Stat2BoxStrategyIndicator = factory(root.SMC, root.IndicatorRegistry);
   }
 }(typeof self !== 'undefined' ? self : this, function (SMC, IndicatorRegistry) {
   'use strict';

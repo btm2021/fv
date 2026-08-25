@@ -1,0 +1,259 @@
+const express = require('express');
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const path = require('path');
+
+const DB = require('./db');
+const binanceClient = require('./binanceClient');
+const scanner = require('./scanner');
+const notification = require('./notification');
+const logger = require('./logger');
+const Stat2Box = require('../indicators/indicator_stat2_box_strategy.js');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Serve indicator and SMC scripts statically so the frontend can reuse the exact same engine
+app.use('/indicators', express.static(path.join(__dirname, '..', 'indicators')));
+app.get('/smc.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'smc.js')));
+
+// WebSocket connection handler
+wss.on('connection', async (ws) => {
+  notification.registerWsClient(ws);
+  try {
+    // Send initial snapshot
+    ws.send(JSON.stringify({
+      type: 'INITIAL_SNAPSHOT',
+      data: {
+        status: await scanner.getStatus(),
+        signals: await DB.getSignals(30),
+        positions: await DB.getActivePositions(),
+        performance: await DB.getPerformanceStats(),
+        logs: logger.getLogs(80)
+      }
+    }));
+  } catch (err) {
+    console.error('WS Snapshot Error:', err);
+  }
+});
+
+// ── REST API ROUTES ──
+
+// 1. System & Scanner Status
+app.get('/api/status', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      status: await scanner.getStatus(),
+      settings: await DB.getAllSettings()
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/scanner/trigger', async (req, res) => {
+  scanner.executeScanCycle().catch(err => console.error(err));
+  res.json({ success: true, message: 'Scan cycle triggered asynchronously.' });
+});
+
+app.post('/api/scanner/toggle', async (req, res) => {
+  try {
+    const current = (await DB.getSetting('is_scanner_active', '1')) === '1';
+    const next = !current;
+    await DB.setSetting('is_scanner_active', next ? '1' : '0');
+    res.json({ success: true, is_scanner_active: next });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Whitelist Symbol Entities
+app.get('/api/whitelist', async (req, res) => {
+  try {
+    const symbols = await DB.getWhitelistSymbols();
+    const result = [];
+    for (const s of symbols) {
+      const strats = await DB.getStrategiesForSymbol(s.symbol);
+      const candles5m = await DB.getCandles(s.symbol, '5m', 1);
+      result.push({
+        ...s,
+        strategies: strats,
+        has_cached_candles: candles5m.length > 0
+      });
+    }
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/whitelist', async (req, res) => {
+  const { symbol, category } = req.body;
+  if (!symbol) return res.status(400).json({ success: false, error: 'Symbol is required' });
+  try {
+    const created = await DB.addWhitelistSymbol(symbol, category || 'Custom');
+    res.json({ success: true, data: created });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/whitelist/:symbol/toggle', async (req, res) => {
+  const { is_enabled } = req.body;
+  try {
+    await DB.toggleWhitelistSymbol(req.params.symbol, is_enabled);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/whitelist/:symbol', async (req, res) => {
+  try {
+    await DB.deleteWhitelistSymbol(req.params.symbol);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Multi-Strategy Manager per Symbol
+app.get('/api/strategies/:symbol', async (req, res) => {
+  try {
+    const strats = await DB.getStrategiesForSymbol(req.params.symbol);
+    res.json({ success: true, data: strats });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/strategies', async (req, res) => {
+  try {
+    const stratId = await DB.saveStrategy(req.body);
+    res.json({ success: true, id: stratId });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/strategies/:id', async (req, res) => {
+  try {
+    await DB.deleteStrategy(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. Signals & Alerts
+app.get('/api/signals', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  try {
+    const signals = await DB.getSignals(limit);
+    res.json({ success: true, data: signals });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Trade Positions & Performance
+app.get('/api/positions', async (req, res) => {
+  try {
+    const active = await DB.getActivePositions();
+    const all = await DB.getAllPositions(50);
+    const stats = await DB.getPerformanceStats();
+    res.json({ success: true, active, all, stats });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Settings Configuration
+app.get('/api/settings', async (req, res) => {
+  try {
+    res.json({ success: true, data: await DB.getAllSettings() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    for (const [k, v] of Object.entries(req.body)) {
+      await DB.setSetting(k, v);
+    }
+    res.json({ success: true, data: await DB.getAllSettings() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 7. Interactive Chart Data Feed (OHLCV + SMC Calculation)
+app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
+  const { symbol, timeframe } = req.params;
+  const sym = symbol.toUpperCase();
+  const tf = timeframe || '5m';
+
+  try {
+    let candles = await DB.getCandles(sym, tf, 1500);
+    if (candles.length < 50) {
+      candles = await binanceClient.syncCandles(sym, tf, 1500);
+    }
+
+    const calc = Stat2Box.calculate(candles, {
+      strategyMode: req.query.strategyMode || 'dual',
+      cmoLength: parseInt(req.query.cmoLength) || 14,
+      maLength: parseInt(req.query.maLength) || 21,
+      atrLength: parseInt(req.query.atrLength) || 14,
+      atrMult: parseFloat(req.query.atrMult) || 2.0,
+      minAtrPct: parseFloat(req.query.minAtrPct) || 0.35,
+      liqThresholdPct: parseFloat(req.query.liqThresholdPct) || 1.5,
+      fvgThresholdPct: parseFloat(req.query.fvgThresholdPct) || 1.5,
+      swingLookback: parseInt(req.query.swingLookback) || 30
+    });
+
+    res.json({
+      success: true,
+      symbol: sym,
+      timeframe: tf,
+      candles: candles,
+      cards: calc ? calc.cards : [],
+      atrData: calc ? calc.atrData : [],
+      liqList: calc ? calc.liqList : [],
+      fvgList: calc ? calc.fvgList : []
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 8. Discover Binance Market Pairs
+app.get('/api/binance/symbols', async (req, res) => {
+  try {
+    const list = await binanceClient.getExchangeInfo();
+    res.json({ success: true, data: list });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 9. Real-Time System Logs Stream API
+app.get('/api/logs', (req, res) => {
+  const limit = parseInt(req.query.limit) || 100;
+  const category = req.query.category || null;
+  const level = req.query.level || null;
+  res.json({ success: true, data: logger.getLogs(limit, category, level) });
+});
+
+app.post('/api/logs/clear', (req, res) => {
+  logger.clear();
+  logger.info('SYSTEM', 'System log buffer cleared by user from dashboard.');
+  res.json({ success: true });
+});
+
+module.exports = { app, server };

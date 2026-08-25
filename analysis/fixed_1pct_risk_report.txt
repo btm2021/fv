@@ -1,0 +1,64 @@
+════════════════════════════════════════════════════════════════════════════════════════════════════
+      BÁO CÁO CHI TIẾT CHIẾN LƯỢC QUẢN LÝ VỐN: FIXED 1% RISK ($1,000 USD BAN ĐẦU)
+════════════════════════════════════════════════════════════════════════════════════════════════════
+
+1. TỔNG QUAN TÀI KHOẢN & TĂNG TRƯỞNG:
+   • Vốn khởi điểm (Initial Capital)   : $1,000.00 USD
+   • Vốn kết thúc (Final Equity)        : $11,127,526.47 USD
+   • Lợi nhuận ròng (Net Profit)        : +$11,126,526.47 USD (+1,112,652.65%)
+   • Tỷ lệ sụt giảm tối đa (Max DD %)  : 8.68%
+   • Số tiền sụt giảm tối đa (Max DD $) : $343,444.40 USD
+   • Hệ số Lợi nhuận (Profit Factor)    : 3.11x
+   • Hệ số Sharpe Ratio                 : 18.96
+   • Hệ số Sortino Ratio                : 77.74
+   • Hệ số Calmar Ratio                 : 128214.10
+
+2. THỐNG KÊ LỆNH & HIỆU SUẤT GIAO DỊCH:
+   • Tổng số lệnh (Total Trades)        : 1,751 lệnh
+   • Lệnh Thắng (Winning Trades)        : 1,282 lệnh (73.22%)
+   • Lệnh Thua (Losing Trades)          : 469 lệnh (26.78%)
+   • Chuỗi Thắng Dài Nhất (Max Win Str) : 22 lệnh liên tiếp
+   • Chuỗi Thua Dài Nhất (Max Loss Str): 7 lệnh liên tiếp
+   • Lãi trung bình / Lệnh thắng       : +$12786.23 USD
+   • Lỗ trung bình / Lệnh thua          : $-11226.91 USD
+
+3. PHÂN TÁCH THEO LOẠI CHIẾN LƯỢC (STRATEGY TYPE):
+trade_type  trades  wins  win_rate      pnl_usd
+      FADE     877   730 83.238312 6.462492e+06
+     TREND     874   552 63.157895 4.664035e+06
+
+4. PHÂN TÁCH THEO HƯỚNG VÀO LỆNH (DIRECTION):
+direction  trades  wins  win_rate      pnl_usd
+      BUY     886   645 72.799097 5.794841e+06
+     SELL     865   637 73.641618 5.331686e+06
+
+5. PHÂN TÁCH THEO LÝ DO ĐÓNG LỆNH (EXIT REASON):
+   exit_reason  trades  wins   win_rate       pnl_usd
+REVERSE_SIGNAL     552   364  65.942029  3.088957e+06
+            SL     281     0   0.000000 -3.892270e+06
+            TP     918   918 100.000000  1.192984e+07
+
+6. PHÂN TÁCH THEO TỪNG CẶP TIỀN (SYMBOL BREAKDOWN - 20 COINS):
+    symbol  trades  wins  win_rate      pnl_usd
+   ADAUSDT      78    57 73.076923 3.665707e+05
+   APTUSDT      96    64 66.666667 5.406466e+05
+   ARBUSDT     132   102 77.272727 6.846494e+05
+  ATOMUSDT      67    49 73.134328 6.242037e+05
+  AVAXUSDT      61    44 72.131148 2.748666e+05
+   BNBUSDT      63    48 76.190476 1.939085e+05
+   BTCUSDT      50    40 80.000000 2.800046e+05
+  DOGEUSDT      59    47 79.661017 4.485514e+05
+   ETHUSDT      66    51 77.272727 3.554832e+05
+   FETUSDT     137   102 74.452555 1.236315e+06
+   FILUSDT      82    64 78.048780 9.093147e+05
+   INJUSDT     108    80 74.074074 5.743686e+05
+  LINKUSDT      63    53 84.126984 3.086995e+05
+  NEARUSDT     113    81 71.681416 8.888728e+05
+    OPUSDT     126    88 69.841270 7.618650e+05
+RENDERUSDT     114    78 68.421053 7.180528e+05
+   SEIUSDT      96    72 75.000000 6.368144e+05
+   SOLUSDT      56    36 64.285714 1.676721e+05
+   TIAUSDT     126    85 67.460317 1.081721e+06
+   XRPUSDT      58    41 70.689655 7.394569e+04
+
+════════════════════════════════════════════════════════════════════════════════════════════════════
