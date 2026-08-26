@@ -99,16 +99,23 @@ class OkxExchangeAdapter extends BaseExchangeAdapter {
     }
     const res = await this.fetchWithRateLimit(url);
     const list = res && res.data ? res.data : [];
-    return list.map(t => ({
-      symbol: this.toCanonicalSymbol(t.instId),
-      instId: t.instId,
-      lastPrice: parseFloat(t.last || 0),
-      high24h: parseFloat(t.high24h || 0),
-      low24h: parseFloat(t.low24h || 0),
-      volume24h: parseFloat(t.vol24h || 0),
-      turnover24h: parseFloat(t.volCcy24h || 0),
-      priceChangePct: t.sodUtc0 && parseFloat(t.sodUtc0) > 0 ? ((parseFloat(t.last) - parseFloat(t.sodUtc0)) / parseFloat(t.sodUtc0)) * 100 : 0
-    }));
+    return list.map(t => {
+      const canonical = this.toCanonicalSymbol(t.instId);
+      const last = parseFloat(t.last || 0);
+      if (canonical && !isNaN(last)) {
+        this.livePriceMap[canonical] = last;
+      }
+      return {
+        symbol: canonical,
+        instId: t.instId,
+        lastPrice: last,
+        high24h: parseFloat(t.high24h || 0),
+        low24h: parseFloat(t.low24h || 0),
+        volume24h: parseFloat(t.vol24h || 0),
+        turnover24h: parseFloat(t.volCcy24h || 0),
+        priceChangePct: t.sodUtc0 && parseFloat(t.sodUtc0) > 0 ? ((parseFloat(t.last) - parseFloat(t.sodUtc0)) / parseFloat(t.sodUtc0)) * 100 : 0
+      };
+    });
   }
 
   async syncCandles(symbol, timeframe = '5m', targetBuffer = 1000) {

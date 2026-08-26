@@ -122,11 +122,16 @@ class ExchangeWorker {
       if (!task) return;
       try {
         const candles = await this.adapter.syncCandles(task.symbol, task.timeframe, targetBuffer);
-        if (!candles || candles.length < 35) return;
+        if (!candles || candles.length < 35) {
+          logger.warn('SCAN', `⚠️ [${this.exchange}] Fetch ${task.symbol} (${task.timeframe}): Không đủ dữ liệu nến (${candles ? candles.length : 0}/35) để phân tích.`);
+          return;
+        }
 
+        let foundAnySignal = false;
         for (const strat of task.strats) {
           const signalResult = strategyEngine.evaluate(candles, strat);
           if (signalResult) {
+            foundAnySignal = true;
             signalResult.exchange = this.exchange;
 
             const existing = await DB.get(`
@@ -146,8 +151,14 @@ class ExchangeWorker {
             }
           }
         }
+
+        // Báo cáo nếu symbol đã xử lý nhưng không phát hiện tín hiệu
+        if (!foundAnySignal) {
+          const lastCandle = candles[candles.length - 1];
+          logger.info('SCAN', `⚪ [${this.exchange}] ${task.symbol} (${task.timeframe}) [${candles.length} nến | Giá: $${lastCandle.close}]: Đã phân tích SMC/ATR ➔ Không phát hiện tín hiệu vào lệnh.`);
+        }
       } catch (err) {
-        // non-blocking
+        logger.error('SCAN', `❌ [${this.exchange}] ${task.symbol} (${task.timeframe}) lỗi xử lý: ${err.message}`);
       }
     }));
 
