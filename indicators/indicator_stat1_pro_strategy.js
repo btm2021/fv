@@ -182,7 +182,8 @@
 
     // ── CALCULATION ──
     calculate: function (candles, inputs) {
-      if (!SMC || !SMC.atrBot || !SMC.swingHighsLows || !SMC.liquidity) {
+      const smcEngine = SMC || (typeof window !== 'undefined' ? (window.SMC || window.SmartMoneyConcepts) : null) || (typeof globalThis !== 'undefined' ? (globalThis.SMC || globalThis.SmartMoneyConcepts) : null);
+      if (!smcEngine || typeof smcEngine.atrBot !== 'function' || typeof smcEngine.swingHighsLows !== 'function' || typeof smcEngine.liquidity !== 'function') {
         return { atrData: [], liqList: [], fvgList: [] };
       }
 
@@ -199,7 +200,7 @@
       const unmitOnly     = inputs.unmitOnly === true || inputs.unmitOnly === 'true';
 
       // 1. Calculate ATRBot
-      const rawAtrData = SMC.atrBot(candles, {
+      const rawAtrData = smcEngine.atrBot(candles, {
         maType    : 'VIDYA',
         source    : 'close',
         cmoLength : inputs.cmoLength || 14,
@@ -209,9 +210,9 @@
       }) || [];
 
       // 2. Calculate SMC Swings, Liquidity, FVG
-      const swings  = SMC.swingHighsLows(candles, parseInt(inputs.swingLength, 10) || 20);
-      const liqList = SMC.liquidity(candles, swings, rangePct) || [];
-      const fvgList = SMC.fvg(candles, unmitOnly) || [];
+      const swings  = smcEngine.swingHighsLows(candles, parseInt(inputs.swingLength, 10) || 20);
+      const liqList = smcEngine.liquidity(candles, swings, rangePct) || [];
+      const fvgList = smcEngine.fvg(candles, unmitOnly) || [];
 
       const liqZones = buildLiqZones(liqList);
 

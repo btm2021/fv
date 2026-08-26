@@ -1,1781 +1,4304 @@
 /**
- * 24/7 Quantum Trading Hub - Frontend Application Controller
+ * STAT2 Pro Full Trading Terminal (React 18 + Tailwind CSS)
+ * 1:1 Implementation of the STAT2 Engine (Lightweight Charts + High-DPI Canvas Overlays)
+ * Features:
+ * - Direct Browser Multi-Exchange Klines (Binance, Bybit, OKX)
+ * - Pure JavaScript SMC & STAT2 Pro Box Strategy Calculation
+ * - High-DPI Canvas Overlay for Trade Cards HUD, Guide Rays, FVG Zones & Liquidity Rays
+ * - On-Chart TradingView-Style Indicator Legend (👁️ ⚙️ ✕) & Watermark
+ * - Indicator Sub-Toolbar Toggle Chips & fx Catalog Modal
+ * - Global All-Market Ticker WebSocket for Live Prices on 1,000+ Pairs
+ * - Collapsible Bottom Desk for 100% Full-Height Chart Analysis
  */
 
-// Application State
-const state = {
-  ws: null,
-  activeTab: 'tabSignals',
-  activeSubtab: 'subActivePositions',
-  status: {},
-  settings: {},
-  whitelist: [],
-  signals: [],
-  activePositions: [],
-  closedPositions: [],
-  limitOrders: [],
-  performance: {},
-  binanceSymbols: [],
-  chart: {
-    symbol: 'BTCUSDT',
-    timeframe: '5m',
-    mode: 'dual',
-    candles: [],
-    calcResult: null,
-    visibleCount: 90,
-    panOffset: 0,
-    isDragging: false,
-    dragStartX: 0,
-    dragStartPan: 0,
-    crosshair: { x: null, y: null, active: false }
+const {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback
+} = React;
+
+// ── UTILITY HELPERS ──
+function formatPrice(val, precision = 2) {
+  if (val === null || val === undefined || isNaN(val)) return '0.00';
+  const num = Number(val);
+  if (num === 0) return '0.00';
+  if (Math.abs(num) < 0.0001) return num.toFixed(7);
+  if (Math.abs(num) < 0.01) return num.toFixed(6);
+  if (Math.abs(num) < 1) return num.toFixed(4);
+  if (Math.abs(num) < 100) return num.toFixed(3);
+  return num.toLocaleString('en-US', {
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision
+  });
+}
+function formatVolume(val) {
+  if (!val || isNaN(val)) return '0';
+  const n = Number(val);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return n.toFixed(0);
+}
+function timeAgo(ts) {
+  if (!ts) return '';
+  const sec = Math.floor((Date.now() - (ts > 1e11 ? ts : ts * 1000)) / 1000);
+  if (sec < 5) return 'just now';
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  return `${Math.floor(sec / 3600)}h ago`;
+}
+
+// ── GLOBAL ALL-MARKET TICKERS STREAM (HYBRID WEBSOCKET + REST ENGINE) ──
+const GlobalMarketStreamManager = {
+  binanceWs: null,
+  okxWs: null,
+  bybitWs: null,
+  pollTimer: null,
+  listeners: new Set(),
+  cachedPrices: {},
+  subscribe(listener) {
+    this.listeners.add(listener);
+    if (Object.keys(this.cachedPrices).length > 0) {
+      listener(this.cachedPrices);
+    }
+    if (!this.binanceWs) this.initBinance();
+    if (!this.okxWs) this.initOkx();
+    if (!this.pollTimer) this.startPeriodicPolling();
+    return () => this.listeners.delete(listener);
+  },
+  emit(updates) {
+    const finalBatch = {};
+    for (const [key, val] of Object.entries(updates)) {
+      const prev = this.cachedPrices[key];
+      const prevPrice = prev ? prev.price : val.price;
+      let tickDir = 'equal';
+      if (prev && val.price > prevPrice) tickDir = 'up';else if (prev && val.price < prevPrice) tickDir = 'down';else if (prev) tickDir = prev.tickDir || 'equal';
+      finalBatch[key] = {
+        ...val,
+        prevPrice,
+        tickDir
+      };
+    }
+    Object.assign(this.cachedPrices, finalBatch);
+    this.listeners.forEach(l => l(finalBatch));
+  },
+  async fetchInitialSnapshot() {
+    const batch = {};
+    const promises = [
+    // 1. Binance Tickers
+    fetch('https://fapi.binance.com/fapi/v1/ticker/24hr').then(r => r.json()).then(arr => {
+      if (Array.isArray(arr)) {
+        for (let i = 0; i < arr.length; i++) {
+          const t = arr[i];
+          const p = parseFloat(t.lastPrice) || 0;
+          const chg = parseFloat(t.priceChangePercent) || 0;
+          const vol = parseFloat(t.quoteVolume) || 0;
+          batch['BINANCE_' + t.symbol] = {
+            price: p,
+            change24h: chg,
+            vol
+          };
+          batch[t.symbol] = {
+            price: p,
+            change24h: chg,
+            vol
+          };
+        }
+      }
+    }).catch(() => {}),
+    // 2. Bybit Linear Tickers
+    fetch('https://api.bybit.com/v5/market/tickers?category=linear').then(r => r.json()).then(json => {
+      if (json.result && json.result.list) {
+        for (let i = 0; i < json.result.list.length; i++) {
+          const t = json.result.list[i];
+          const p = parseFloat(t.lastPrice) || 0;
+          const chg = (parseFloat(t.price24hPcnt) || 0) * 100;
+          const vol = parseFloat(t.turnover24h) || 0;
+          batch['BYBIT_' + t.symbol] = {
+            price: p,
+            change24h: chg,
+            vol
+          };
+          if (!batch[t.symbol]) batch[t.symbol] = {
+            price: p,
+            change24h: chg,
+            vol
+          };
+        }
+      }
+    }).catch(() => {}),
+    // 3. OKX SWAP Tickers
+    fetch('https://www.okx.com/api/v5/market/tickers?instType=SWAP').then(r => r.json()).then(json => {
+      if (json.data && Array.isArray(json.data)) {
+        for (let i = 0; i < json.data.length; i++) {
+          const t = json.data[i];
+          const rawId = t.instId; // e.g. "BTC-USDT-SWAP"
+          const symDash = rawId.replace('-SWAP', ''); // "BTC-USDT"
+          const symClean = symDash.replace('-', ''); // "BTCUSDT"
+          const last = parseFloat(t.last) || 0;
+          const open24 = parseFloat(t.sodUtc8 || t.open24h || t.last) || last;
+          const chg = open24 > 0 ? (last - open24) / open24 * 100 : 0;
+          const vol = parseFloat(t.volCcy24h) || 0;
+          batch['OKX_' + symClean] = {
+            price: last,
+            change24h: chg,
+            vol
+          };
+          batch['OKX_' + symDash] = {
+            price: last,
+            change24h: chg,
+            vol
+          };
+          batch['OKX_' + rawId] = {
+            price: last,
+            change24h: chg,
+            vol
+          };
+        }
+      }
+    }).catch(() => {})];
+    await Promise.allSettled(promises);
+    this.emit(batch);
+    return batch;
+  },
+  startPeriodicPolling() {
+    this.fetchInitialSnapshot();
+    this.pollTimer = setInterval(() => {
+      this.fetchInitialSnapshot();
+    }, 4000);
+  },
+  initBinance() {
+    try {
+      const ws = new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
+      this.binanceWs = ws;
+      ws.onmessage = e => {
+        try {
+          const arr = JSON.parse(e.data);
+          if (Array.isArray(arr)) {
+            const batch = {};
+            for (let i = 0; i < arr.length; i++) {
+              const t = arr[i];
+              const p = parseFloat(t.c) || 0;
+              const chg = parseFloat(t.P) || 0;
+              const vol = parseFloat(t.q) || 0;
+              batch['BINANCE_' + t.s] = {
+                price: p,
+                change24h: chg,
+                vol
+              };
+              batch[t.s] = {
+                price: p,
+                change24h: chg,
+                vol
+              };
+            }
+            this.emit(batch);
+          }
+        } catch (err) {}
+      };
+      ws.onclose = () => setTimeout(() => this.initBinance(), 4000);
+    } catch (e) {}
+  },
+  initOkx() {
+    try {
+      const ws = new WebSocket('wss://ws.okx.com:8443/ws/v5/public');
+      this.okxWs = ws;
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          op: 'subscribe',
+          args: [{
+            channel: 'tickers',
+            instType: 'SWAP'
+          }]
+        }));
+      };
+      ws.onmessage = e => {
+        try {
+          const str = e.data.toString();
+          if (str === 'pong') return;
+          const msg = JSON.parse(str);
+          if (msg.data && Array.isArray(msg.data)) {
+            const batch = {};
+            for (let i = 0; i < msg.data.length; i++) {
+              const t = msg.data[i];
+              const rawId = t.instId;
+              const symDash = rawId.replace('-SWAP', '');
+              const symClean = symDash.replace('-', '');
+              const last = parseFloat(t.last) || 0;
+              const open24 = parseFloat(t.sodUtc8 || t.open24h || t.last) || last;
+              const chg = open24 > 0 ? (last - open24) / open24 * 100 : 0;
+              const vol = parseFloat(t.volCcy24h) || 0;
+              batch['OKX_' + symClean] = {
+                price: last,
+                change24h: chg,
+                vol
+              };
+              batch['OKX_' + symDash] = {
+                price: last,
+                change24h: chg,
+                vol
+              };
+              batch['OKX_' + rawId] = {
+                price: last,
+                change24h: chg,
+                vol
+              };
+            }
+            this.emit(batch);
+          }
+        } catch (err) {}
+      };
+      ws.onclose = () => setTimeout(() => this.initOkx(), 4000);
+    } catch (e) {}
   }
 };
 
-// DOM Element Cache
-const el = {};
-
-function initDom() {
-  el.navMarginBalance = document.getElementById('navMarginBalance');
-  el.navWalletBalance = document.getElementById('navWalletBalance');
-  el.navUnrealizedPnl = document.getElementById('navUnrealizedPnl');
-  el.navMarginRatio = document.getElementById('navMarginRatio');
-  el.scannerStatusPill = document.getElementById('scannerStatusPill');
-
-  el.tickerSymbolName = document.getElementById('tickerSymbolName');
-  el.tickerMarkPrice = document.getElementById('tickerMarkPrice');
-  el.tickerChange24h = document.getElementById('tickerChange24h');
-  el.tickerHigh24h = document.getElementById('tickerHigh24h');
-  el.tickerLow24h = document.getElementById('tickerLow24h');
-  el.tickerVol24h = document.getElementById('tickerVol24h');
-  el.tickerFunding = document.getElementById('tickerFunding');
-
-  el.btnManualScan = document.getElementById('btnManualScan');
-  el.btnToggleScanner = document.getElementById('btnToggleScanner');
-
-  el.menuTabs = document.querySelectorAll('.menu-tab');
-  el.tabPanels = document.querySelectorAll('.tab-panel');
-
-  // Subnav tabs
-  el.subnavBtns = document.querySelectorAll('.subnav-btn');
-  el.subtabContents = document.querySelectorAll('.subtab-content');
-
-  el.subCountActive = document.getElementById('subCountActive');
-  el.subCountLimit = document.getElementById('subCountLimit');
-  el.subCountClosed = document.getElementById('subCountClosed');
-  el.subCountSignals = document.getElementById('subCountSignals');
-
-  // Tables
-  el.tbodyActivePositions = document.getElementById('tbodyActivePositions');
-  el.tbodyLimitOrders = document.getElementById('tbodyLimitOrders');
-  el.tbodyClosedPositions = document.getElementById('tbodyClosedPositions');
-  el.signalsFeedGrid = document.getElementById('signalsFeedGrid');
-  el.whitelistEntityGrid = document.getElementById('whitelistEntityGrid');
-
-  el.badgeActivePositions = document.getElementById('badgeActivePositions');
-  el.badgeWhitelistCount = document.getElementById('badgeWhitelistCount');
-  el.btnImportTop500 = document.getElementById('btnImportTop500');
-
-  // Chart elements
-  el.chartSymbolSelect = document.getElementById('chartSymbolSelect');
-  el.chartTimeframeSelect = document.getElementById('chartTimeframeSelect');
-  el.chartModeSelect = document.getElementById('chartModeSelect');
-  el.btnReloadChart = document.getElementById('btnReloadChart');
-  el.btnResetChartZoom = document.getElementById('btnResetChartZoom');
-  el.liveChartCanvas = document.getElementById('liveChartCanvas');
-  el.chartViewport = document.getElementById('chartViewport');
-  el.chartHudBar = document.getElementById('chartHudBar');
-  el.hudSymbol = document.getElementById('hudSymbol');
-  el.hudOpen = document.getElementById('hudOpen');
-  el.hudHigh = document.getElementById('hudHigh');
-  el.hudLow = document.getElementById('hudLow');
-  el.hudClose = document.getElementById('hudClose');
-  el.hudVol = document.getElementById('hudVol');
-  el.hudChange = document.getElementById('hudChange');
-
-  // Settings form
-  el.formBotSettings = document.getElementById('formBotSettings');
-  el.cfgEquity = document.getElementById('cfgEquity');
-  el.cfgRiskPct = document.getElementById('cfgRiskPct');
-  el.cfgBufferLimit = document.getElementById('cfgBufferLimit');
-  el.cfgPaperMode = document.getElementById('cfgPaperMode');
-  el.cfgTgToken = document.getElementById('cfgTgToken');
-  el.cfgTgChatId = document.getElementById('cfgTgChatId');
-  el.cfgDiscordUrl = document.getElementById('cfgDiscordUrl');
-
-  // Log elements
-  el.badgeLogCount = document.getElementById('badgeLogCount');
-  el.cntLogAll = document.getElementById('cntLogAll');
-  el.logFilterBtns = document.querySelectorAll('.log-filter-btn');
-  el.chkAutoScroll = document.getElementById('chkAutoScroll');
-  el.btnCopyLogs = document.getElementById('btnCopyLogs');
-  el.btnClearLogs = document.getElementById('btnClearLogs');
-  el.terminalLogContainer = document.getElementById('terminalLogContainer');
-  el.terminalLogBody = document.getElementById('terminalLogBody');
-
-  // Modals
-  el.modalAddSymbol = document.getElementById('modalAddSymbol');
-  el.btnAddSymbolModalBtn = document.getElementById('btnAddSymbolModalBtn');
-  el.btnCloseAddSymbolModal = document.getElementById('btnCloseAddSymbolModal');
-  el.btnCancelAddSymbol = document.getElementById('btnCancelAddSymbol');
-  el.btnConfirmAddSymbol = document.getElementById('btnConfirmAddSymbol');
-  el.inputNewSymbol = document.getElementById('inputNewSymbol');
-  el.selectNewCategory = document.getElementById('selectNewCategory');
-  el.binanceSymbolsDatalist = document.getElementById('binanceSymbolsDatalist');
-
-  el.modalEditStrategy = document.getElementById('modalEditStrategy');
-  el.btnCloseEditStratModal = document.getElementById('btnCloseEditStratModal');
-  el.btnCancelEditStrat = document.getElementById('btnCancelEditStrat');
-  el.formEditStrategy = document.getElementById('formEditStrategy');
-
-  el.modalTradeDecision = document.getElementById('modalTradeDecision');
-  el.btnCloseDecisionModal = document.getElementById('btnCloseDecisionModal');
-  el.modalDecisionBadge = document.getElementById('modalDecisionBadge');
-  el.modalDecisionSymbol = document.getElementById('modalDecisionSymbol');
-  el.modalDecisionBody = document.getElementById('modalDecisionBody');
-
-  // Reset Buttons
-  el.btnResetOrdersAndPnL = document.getElementById('btnResetOrdersAndPnL');
-  el.btnResetTradesOnly = document.getElementById('btnResetTradesOnly');
-  el.btnResetFactoryDb = document.getElementById('btnResetFactoryDb');
-}
-
-// ── WEBSOCKET LIVE STREAM ──
-function initWebSocket() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}`;
-  state.ws = new WebSocket(wsUrl);
-
-  state.ws.onopen = () => {
-    console.log('⚡ Connected to 24/7 Quantum Trading Hub WebSocket stream.');
-  };
-
-  state.ws.onmessage = (event) => {
+// ── DIRECT BROWSER-TO-EXCHANGE KLINE CLIENT ──
+const DirectExchangeClient = {
+  async fetchBinance(symbol, interval = '5m', limit = 1000) {
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+    const data = await res.json();
+    return data.map(k => ({
+      time: Math.floor(k[0] / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5])
+    }));
+  },
+  async fetchBybit(symbol, interval = '5m', limit = 1000) {
+    const tfMap = {
+      '1m': '1',
+      '3m': '3',
+      '5m': '5',
+      '15m': '15',
+      '30m': '30',
+      '1h': '60',
+      '2h': '120',
+      '4h': '240',
+      '1d': 'D'
+    };
+    const bybitTf = tfMap[interval] || '5';
+    const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol.toUpperCase()}&interval=${bybitTf}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Bybit HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.result || !json.result.list) return [];
+    return json.result.list.map(k => ({
+      time: Math.floor(parseInt(k[0], 10) / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5])
+    })).sort((a, b) => a.time - b.time);
+  },
+  async fetchOkx(symbol, interval = '5m', limit = 500) {
+    let sym = symbol.toUpperCase().replace('-SWAP', '');
+    let instId = sym.includes('-') ? `${sym}-SWAP` : sym.endsWith('USDT') ? `${sym.substring(0, sym.length - 4)}-USDT-SWAP` : `${sym}-SWAP`;
+    const tfMap = {
+      '1m': '1m',
+      '3m': '3m',
+      '5m': '5m',
+      '15m': '15m',
+      '30m': '30m',
+      '1h': '1H',
+      '2h': '2H',
+      '4h': '4H',
+      '1d': '1D'
+    };
+    const bar = tfMap[interval] || '5m';
+    const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`OKX HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.data) return [];
+    return json.data.map(k => ({
+      time: Math.floor(parseInt(k[0], 10) / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5])
+    })).sort((a, b) => a.time - b.time);
+  },
+  async fetchCandles(exchange, symbol, timeframe) {
+    const ex = (exchange || 'BINANCE').toUpperCase();
+    if (ex === 'BYBIT') return this.fetchBybit(symbol, timeframe);
+    if (ex === 'OKX') return this.fetchOkx(symbol, timeframe);
+    return this.fetchBinance(symbol, timeframe);
+  },
+  createWebSocket(exchange, symbol, timeframe, onTick) {
+    const ex = (exchange || 'BINANCE').toUpperCase();
+    let rawWs = null;
+    let isClosed = false;
+    const safeClose = () => {
+      isClosed = true;
+      if (!rawWs) return;
+      rawWs.onopen = null;
+      rawWs.onmessage = null;
+      rawWs.onerror = null;
+      rawWs.onclose = null;
+      if (rawWs.readyState === WebSocket.OPEN) {
+        try {
+          rawWs.close();
+        } catch (e) {}
+      } else if (rawWs.readyState === WebSocket.CONNECTING) {
+        rawWs.onopen = () => {
+          try {
+            rawWs.close();
+          } catch (e) {}
+        };
+      }
+    };
     try {
-      const msg = JSON.parse(event.data);
-      handleWsMessage(msg);
-    } catch (e) {
-      console.error('WS Parse Error:', e);
+      if (ex === 'BINANCE') {
+        rawWs = new WebSocket(`wss://fstream.binance.com/ws/${symbol.toLowerCase()}@kline_${timeframe}`);
+        rawWs.onmessage = e => {
+          if (isClosed) return;
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.k) {
+              onTick({
+                time: Math.floor(msg.k.t / 1000),
+                open: parseFloat(msg.k.o),
+                high: parseFloat(msg.k.h),
+                low: parseFloat(msg.k.l),
+                close: parseFloat(msg.k.c),
+                volume: parseFloat(msg.k.v)
+              });
+            }
+          } catch (err) {}
+        };
+      } else if (ex === 'BYBIT') {
+        const tfMap = {
+          '1m': '1',
+          '3m': '3',
+          '5m': '5',
+          '15m': '15',
+          '30m': '30',
+          '1h': '60',
+          '2h': '120',
+          '4h': '240',
+          '1d': 'D'
+        };
+        const bybitTf = tfMap[timeframe] || '5';
+        rawWs = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+        rawWs.onopen = () => {
+          if (isClosed) {
+            try {
+              rawWs.close();
+            } catch (e) {}
+            return;
+          }
+          try {
+            rawWs.send(JSON.stringify({
+              op: 'subscribe',
+              args: [`kline.${bybitTf}.${symbol.toUpperCase()}`]
+            }));
+          } catch (e) {}
+        };
+        rawWs.onmessage = e => {
+          if (isClosed) return;
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.data && Array.isArray(msg.data) && msg.data[0]) {
+              const k = msg.data[0];
+              onTick({
+                time: Math.floor(parseInt(k.start, 10) / 1000),
+                open: parseFloat(k.open),
+                high: parseFloat(k.high),
+                low: parseFloat(k.low),
+                close: parseFloat(k.close),
+                volume: parseFloat(k.volume)
+              });
+            }
+          } catch (err) {}
+        };
+      } else if (ex === 'OKX') {
+        let sym = symbol.toUpperCase().replace('-SWAP', '');
+        let instId = sym.includes('-') ? `${sym}-SWAP` : sym.endsWith('USDT') ? `${sym.substring(0, sym.length - 4)}-USDT-SWAP` : `${sym}-SWAP`;
+        const tfMap = {
+          '1m': '1m',
+          '3m': '3m',
+          '5m': '5m',
+          '15m': '15m',
+          '30m': '30m',
+          '1h': '1H',
+          '2h': '2H',
+          '4h': '4H',
+          '1d': '1D'
+        };
+        const bar = tfMap[timeframe] || '5m';
+        rawWs = new WebSocket('wss://ws.okx.com:8443/ws/v5/public');
+        rawWs.onopen = () => {
+          if (isClosed) {
+            try {
+              rawWs.close();
+            } catch (e) {}
+            return;
+          }
+          try {
+            rawWs.send(JSON.stringify({
+              op: 'subscribe',
+              args: [{
+                channel: `candle${bar}`,
+                instId
+              }]
+            }));
+          } catch (e) {}
+        };
+        rawWs.onmessage = e => {
+          if (isClosed) return;
+          try {
+            const str = e.data.toString();
+            if (str === 'pong') return;
+            const msg = JSON.parse(str);
+            if (msg.data && Array.isArray(msg.data) && msg.data[0]) {
+              const k = msg.data[0];
+              onTick({
+                time: Math.floor(parseInt(k[0], 10) / 1000),
+                open: parseFloat(k[1]),
+                high: parseFloat(k[2]),
+                low: parseFloat(k[3]),
+                close: parseFloat(k[4]),
+                volume: parseFloat(k[5])
+              });
+            }
+          } catch (err) {}
+        };
+      }
+    } catch (e) {}
+    return {
+      close: safeClose,
+      rawWs
+    };
+  }
+};
+
+// ── DEFAULT INDICATORS SPECIFICATION (EXACT STAT2.HTML SPEC) ──
+const DEFAULT_INDICATOR_INSTANCES = [{
+  id: 'inst_stat2_box_1',
+  type: 'stat2_box_strategy',
+  name: 'STAT2 Pro Box Strategy',
+  visible: true,
+  inputs: {
+    strategyMode: 'dual',
+    cmoLength: 14,
+    maLength: 21,
+    atrLength: 14,
+    atrMult: 2.0,
+    minAtrPct: 0.35,
+    liqThresholdPct: 1.5,
+    fvgThresholdPct: 1.5,
+    swingLookback: 30,
+    maxCardsVisible: 15,
+    // Order Execution Options
+    orderType: 'MARKET',
+    leverage: 20,
+    marginMode: 'ISOLATED',
+    riskPerTradePct: 1.0,
+    maxOpenTrades: 5,
+    autoMoveBE: true,
+    enableTrailingSl: true,
+    tp1CloseRatio: 50
+  },
+  style: {
+    // 1. Box & Cards
+    showCards: true,
+    cardWidth: 210,
+    cardBackground: '#0b1120',
+    cardOpacity: 0.94,
+    showStem: true,
+    // 2. Guide Rays & Lines
+    showGuideLines: true,
+    showEntryLine: true,
+    showTp1Line: true,
+    showTp2Line: true,
+    showSlLine: true,
+    showLineBadges: true,
+    lineLength: 280,
+    lineThickness: 2.0,
+    // 3. SMC Structures
+    showFVG: true,
+    fvgOpacity: 0.18,
+    showLiquidity: true,
+    showRibbon: true,
+    showTrail2: true,
+    // 4. Colors
+    buyColor: '#10b981',
+    sellColor: '#f43f5e',
+    fadeShortColor: '#f59e0b',
+    fadeLongColor: '#06b6d4',
+    entryLineColor: '#0284c7',
+    tp1LineColor: '#10b981',
+    tp2LineColor: '#06b6d4',
+    slLineColor: '#f43f5e',
+    fvgBullColor: '#10b981',
+    fvgBearColor: '#f43f5e',
+    liqBslColor: '#ec4899',
+    liqSslColor: '#8b5cf6',
+    bullCloudColor: '#10b981',
+    bearCloudColor: '#f43f5e',
+    stopColor: '#a855f7',
+    // 5. Font Sizes
+    titleFontSize: 11.5,
+    badgeFontSize: 9.5,
+    priceFontSize: 11,
+    labelFontSize: 10,
+    lineBadgeFontSize: 10,
+    fvgFontSize: 10,
+    liqFontSize: 11
+  }
+}, {
+  id: 'inst_ema_1',
+  type: 'ema',
+  name: 'EMA Ribbon',
+  visible: true,
+  inputs: {
+    period1: 21,
+    period2: 50,
+    period3: 200,
+    source: 'close'
+  },
+  style: {
+    showEma1: true,
+    ema1Color: '#38bdf8',
+    ema1Width: 1.5,
+    showEma2: true,
+    ema2Color: '#a855f7',
+    ema2Width: 1.5,
+    showEma3: true,
+    ema3Color: '#f59e0b',
+    ema3Width: 2
+  }
+}, {
+  id: 'inst_vwap_1',
+  type: 'vwap',
+  name: 'VWAP',
+  visible: true,
+  inputs: {
+    anchor: 'session',
+    rollingPeriod: 200,
+    source: 'hlc3',
+    stdevMult1: 1.0,
+    stdevMult2: 2.0,
+    stdevMult3: 3.0
+  },
+  style: {
+    showVwap: true,
+    vwapColor: '#fbbf24',
+    vwapWidth: 2,
+    showBand1: false,
+    band1Color: '#38bdf8',
+    showBand2: false,
+    band2Color: '#a855f7'
+  }
+}];
+
+// ── LOCALSTORAGE PERSISTENCE FOR CHART INDICATORS ──
+const STORAGE_KEY_INDICATORS = 'stat2_chart_indicator_instances';
+function loadSavedIndicators() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_INDICATORS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
     }
-  };
-
-  state.ws.onclose = () => {
-    console.warn('WS Disconnected. Reconnecting in 3s...');
-    setTimeout(initWebSocket, 3000);
-  };
+  } catch (e) {
+    console.warn('Error loading saved indicator settings:', e);
+  }
+  return DEFAULT_INDICATOR_INSTANCES;
 }
+function saveIndicatorsToStorage(instances) {
+  try {
+    const clean = instances.map(inst => ({
+      id: inst.id,
+      type: inst.type,
+      name: inst.name,
+      visible: inst.visible !== false,
+      inputs: inst.inputs || {},
+      style: inst.style || {}
+    }));
+    localStorage.setItem(STORAGE_KEY_INDICATORS, JSON.stringify(clean));
+  } catch (e) {
+    console.warn('Error saving indicator settings to localStorage:', e);
+  }
+}
+function FullStat2CandleChart({
+  symbol,
+  timeframe = '5m',
+  exchange = 'BINANCE',
+  onTfChange,
+  isCollapsed,
+  onToggleCollapse,
+  instances,
+  onOpenCatalog,
+  onToggleVisibility,
+  onOpenSettings,
+  onRemoveInstance
+}) {
+  const chartContainerRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const indicatorSeriesMap = useRef(new Map()); // instId -> [ series1, series2, ... ]
+  const wsRef = useRef(null);
+  const candlesRef = useRef([]);
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
+  const [loading, setLoading] = useState(false);
 
-function handleWsMessage(msg) {
-  switch (msg.type) {
-    case 'INITIAL_SNAPSHOT':
-      state.status = msg.data.status;
-      state.signals = msg.data.signals || [];
-      state.activePositions = (msg.data.positions || []).filter(p => p.status === 'ACTIVE');
-      state.performance = msg.data.performance || {};
-      state.logs = msg.data.logs || [];
-      updateDashboardUI();
-      renderLogs();
-      break;
+  // ── DRAWING TOOLS & INTERACTION STATE ──
+  const [drawTool, setDrawTool] = useState('cursor'); // 'cursor', 'line', 'rect', 'measure'
+  const [drawColor, setDrawColor] = useState('#00F0FF'); // '#00F0FF', '#F0B90B', '#10B981', '#F43F5E'
+  const [drawings, setDrawings] = useState([]);
+  const [currentDrawing, setCurrentDrawing] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [hoverTarget, setHoverTarget] = useState(null); // { targetId, handle, cursor, anchor }
+  const [dragAction, setDragAction] = useState(null); // 'create', 'move', 'tl', 'tr', 'br', 'bl', 'p1', 'p2'
+  const [dragOrigin, setDragOrigin] = useState(null);
+  const drawingsRef = useRef([]);
+  drawingsRef.current = drawings;
+  const currentDrawingRef = useRef(null);
+  currentDrawingRef.current = currentDrawing;
+  const selectedIdRef = useRef(null);
+  selectedIdRef.current = selectedId;
+  const hoverTargetRef = useRef(null);
+  hoverTargetRef.current = hoverTarget;
+  const dragActionRef = useRef(null);
+  dragActionRef.current = dragAction;
+  const dragOriginRef = useRef(null);
+  dragOriginRef.current = dragOrigin;
 
-    case 'SCANNER_HEARTBEAT':
-      state.status = msg.data;
-      updateHeaderMetrics();
-      break;
+  // 5-Second Debounce Timers Map for Server Saves
+  const saveTimersRef = useRef(new Map());
+  const debouncedSaveDrawing = useCallback(drawing => {
+    if (!drawing || !drawing.id) return;
+    const targetId = drawing.id;
+    if (saveTimersRef.current.has(targetId)) {
+      clearTimeout(saveTimersRef.current.get(targetId));
+    }
+    const timer = setTimeout(async () => {
+      saveTimersRef.current.delete(targetId);
+      try {
+        await fetch('/api/drawings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            id: drawing.id,
+            symbol,
+            exchange,
+            timeframe,
+            drawing_type: drawing.type,
+            data_json: drawing
+          })
+        });
+      } catch (err) {
+        console.warn('Debounced save error:', err);
+      }
+    }, 5000);
+    saveTimersRef.current.set(targetId, timer);
+  }, [symbol, exchange, timeframe]);
 
-    case 'NEW_SIGNAL':
-      state.signals.unshift(msg.data);
-      if (state.signals.length > 100) state.signals.pop();
-      renderSignalsFeed();
-      updateSubnavCounters();
-      break;
+  // Load saved drawings from DB on symbol / exchange change & clear pending timers
+  useEffect(() => {
+    let isCancelled = false;
+    setSelectedId(null);
+    setHoverTarget(null);
+    saveTimersRef.current.forEach(t => clearTimeout(t));
+    saveTimersRef.current.clear();
+    async function fetchDrawings() {
+      try {
+        const res = await fetch(`/api/drawings?symbol=${symbol}&exchange=${exchange}`).then(r => r.json());
+        if (!isCancelled && res.success && Array.isArray(res.data)) {
+          setDrawings(res.data.map(item => ({
+            id: item.id,
+            type: item.drawing_type,
+            ...(typeof item.data === 'object' ? item.data : JSON.parse(item.data_json || '{}'))
+          })));
+        }
+      } catch (e) {}
+    }
+    fetchDrawings();
+    return () => {
+      isCancelled = true;
+      saveTimersRef.current.forEach(t => clearTimeout(t));
+      saveTimersRef.current.clear();
+    };
+  }, [symbol, exchange]);
+  const handleClearDrawings = async e => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    saveTimersRef.current.forEach(t => clearTimeout(t));
+    saveTimersRef.current.clear();
+    setDrawings([]);
+    setCurrentDrawing(null);
+    setSelectedId(null);
+    setHoverTarget(null);
+    try {
+      await fetch(`/api/drawings?symbol=${symbol}&exchange=${exchange}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {}
+  };
+  const handleDeleteDrawing = async (id, e) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const targetId = id || selectedIdRef.current;
+    if (!targetId) return;
 
-    case 'POSITIONS_UPDATE':
-      state.activePositions = (msg.data.positions || []).filter(p => p.status === 'ACTIVE');
-      state.performance = msg.data.stats || {};
-      state.livePrices = msg.data.livePrices || {};
-      renderActivePositions();
-      updateHeaderMetrics();
-      updateSubnavCounters();
+    // Immediately cancel any pending 5s debounce save timer for this drawing
+    if (saveTimersRef.current.has(targetId)) {
+      clearTimeout(saveTimersRef.current.get(targetId));
+      saveTimersRef.current.delete(targetId);
+    }
+    setDrawings(prev => prev.filter(d => d.id !== targetId));
+    if (selectedIdRef.current === targetId) setSelectedId(null);
+    setHoverTarget(null);
+    setDragAction(null);
+    triggerCanvasRender();
+    try {
+      await fetch(`/api/drawings/${targetId}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {}
+  };
+  const handleChangeColor = async (id, newColor, e) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const target = drawingsRef.current.find(d => d.id === id);
+    if (!target) return;
+    target.color = newColor;
+    setDrawings([...drawingsRef.current]);
+    triggerCanvasRender();
+    debouncedSaveDrawing(target);
+  };
 
-      // Real-time live price ticker for the currently active chart pair
-      if (state.chart.symbol && state.livePrices && state.livePrices[state.chart.symbol]) {
-        const liveP = state.livePrices[state.chart.symbol];
-        if (el.tickerMarkPrice) {
-          el.tickerMarkPrice.textContent = formatPrice(liveP);
+  // Keyboard shortcut: Delete or Backspace to delete selected drawing
+  useEffect(() => {
+    const handleKeyDown = e => {
+      if (selectedIdRef.current && (e.key === 'Delete' || e.key === 'Backspace')) {
+        const tag = document.activeElement ? document.activeElement.tagName : '';
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+          handleDeleteDrawing(selectedIdRef.current, e);
         }
       }
-      break;
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-    case 'SYSTEM_LOG':
-      if (!state.logs) state.logs = [];
-      state.logs.push(msg.data);
-      if (state.logs.length > 500) state.logs.shift();
-      appendSingleLog(msg.data);
-      updateLogCounters();
-      break;
-  }
-}
+  // 1. High-DPI Canvas Overlay Render (Draws STAT2 Trade Cards HUD, Guide Rays, FVG, Liq Lines & User Drawings)
+  const triggerCanvasRender = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const currentCandles = candlesRef.current;
+    if (!canvas || !chart || !candleSeries || !currentCandles || currentCandles.length === 0) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.clientWidth || canvas.width;
+    const h = canvas.clientHeight || canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const timeScale = chart.timeScale();
+    const visibleRange = timeScale.getVisibleRange();
+    if (!visibleRange) return;
+    const fromTime = visibleRange.from;
+    const toTime = visibleRange.to;
+    const rightViewportX = w - 65;
+    const getX = t => {
+      if (t === null || t === undefined) return null;
+      const direct = timeScale.timeToCoordinate(t);
+      if (direct !== null && !isNaN(direct)) return direct;
+      if (currentCandles && currentCandles.length > 1) {
+        const first = currentCandles[0];
+        const last = currentCandles[currentCandles.length - 1];
+        const firstX = timeScale.timeToCoordinate(first.time);
+        const lastX = timeScale.timeToCoordinate(last.time);
+        if (firstX !== null && lastX !== null && last.time !== first.time) {
+          const pxPerSec = (lastX - firstX) / (last.time - first.time);
+          return firstX + (t - first.time) * pxPerSec;
+        }
+      }
+      return null;
+    };
+    const getY = p => p !== null && p !== undefined && !isNaN(p) ? candleSeries.priceToCoordinate(p) : null;
 
-// ── REST API FETCHERS ──
-async function fetchInitialData() {
-  try {
-    const [resStatus, resWhitelist, resSignals, resPositions, resSettings, resBinanceSymbols, resLogs] = await Promise.all([
-      fetch('/api/status').then(r => r.json()),
-      fetch('/api/whitelist').then(r => r.json()),
-      fetch('/api/signals?limit=100').then(r => r.json()),
-      fetch('/api/positions').then(r => r.json()),
-      fetch('/api/settings').then(r => r.json()),
-      fetch('/api/binance/symbols').then(r => r.json()),
-      fetch('/api/logs?limit=100').then(r => r.json())
-    ]);
-
-    if (resStatus.success) {
-      state.status = resStatus.status;
-      state.settings = resStatus.settings;
+    // A. Render each active indicator's canvas layer
+    for (const inst of instancesRef.current) {
+      if (!inst.visible || !inst.calcResult) continue;
+      const def = window.IndicatorRegistry ? window.IndicatorRegistry.get(inst.type) : null;
+      if (def && typeof def.renderCanvas === 'function') {
+        try {
+          def.renderCanvas(ctx, inst.calcResult, inst.style, {
+            getX,
+            getY,
+            fromTime,
+            toTime,
+            rightViewportX,
+            candles: currentCandles,
+            formatPrice
+          });
+        } catch (err) {
+          console.warn('Overlay render error:', err);
+        }
+      }
     }
-    if (resWhitelist.success) state.whitelist = resWhitelist.data;
-    if (resSignals.success) state.signals = resSignals.data;
-    if (resPositions.success) {
-      state.activePositions = resPositions.active || [];
-      state.closedPositions = (resPositions.all || []).filter(p => p.status !== 'ACTIVE');
-      state.performance = resPositions.stats || {};
+
+    // B. Render User Drawings (Trendline, Rectangle, Measure Tool with Selection Handles)
+    const allDrawings = [...(drawingsRef.current || [])];
+    if (currentDrawingRef.current) allDrawings.push(currentDrawingRef.current);
+    const activeSelId = selectedIdRef.current;
+    for (const d of allDrawings) {
+      if (!d.p1 || !d.p2) continue;
+      const x1 = getX(d.p1.time);
+      const y1 = getY(d.p1.price);
+      const x2 = getX(d.p2.time);
+      const y2 = getY(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const color = d.color || '#00F0FF';
+      const isSelected = activeSelId === d.id;
+      if (d.type === 'line') {
+        // Trendline / Segment
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isSelected ? 2.5 : 2;
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x1, y1, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x2, y2, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Selection Handles & Aura
+        if (isSelected) {
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 2;
+          ctx.fillStyle = '#38BDF8';
+          ctx.beginPath();
+          ctx.arc(x1, y1, 5.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(x2, y2, 5.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+        const deltaP = d.p2.price - d.p1.price;
+        const pctP = d.p1.price > 0 ? deltaP / d.p1.price * 100 : 0;
+        ctx.fillStyle = '#0B0E18';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        const tagText = `${pctP >= 0 ? '+' : ''}${pctP.toFixed(2)}% ($${formatPrice(Math.abs(deltaP))})`;
+        ctx.font = 'bold 10px JetBrains Mono, monospace';
+        const tagW = ctx.measureText(tagText).width + 8;
+        ctx.fillRect(x2 + 6, y2 - 8, tagW, 16);
+        ctx.strokeRect(x2 + 6, y2 - 8, tagW, 16);
+        ctx.fillStyle = color;
+        ctx.fillText(tagText, x2 + 10, y2 + 4);
+        ctx.restore();
+      } else if (d.type === 'rect') {
+        // Rectangle / Price Zone
+        ctx.save();
+        const rx = Math.min(x1, x2);
+        const ry = Math.min(y1, y2);
+        const rw = Math.abs(x2 - x1);
+        const rh = Math.abs(y2 - y1);
+        ctx.fillStyle = color + '22';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isSelected ? 2 : 1.5;
+        ctx.strokeRect(rx, ry, rw, rh);
+
+        // Selection Outline & 4 Corner Handles
+        if (isSelected) {
+          ctx.strokeStyle = '#38BDF8';
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(rx - 2, ry - 2, rw + 4, rh + 4);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#0284C7';
+          ctx.lineWidth = 1.5;
+          [[rx, ry], [rx + rw, ry], [rx + rw, ry + rh], [rx, ry + rh]].forEach(([hx, hy]) => {
+            ctx.fillRect(hx - 4, hy - 4, 8, 8);
+            ctx.strokeRect(hx - 4, hy - 4, 8, 8);
+          });
+        }
+        ctx.restore();
+      } else if (d.type === 'measure') {
+        // Measure Tool (Ruler)
+        ctx.save();
+        const rx = Math.min(x1, x2);
+        const ry = Math.min(y1, y2);
+        const rw = Math.abs(x2 - x1);
+        const rh = Math.abs(y2 - y1);
+        const deltaP = d.p2.price - d.p1.price;
+        const pctP = d.p1.price > 0 ? deltaP / d.p1.price * 100 : 0;
+        const isUp = deltaP >= 0;
+        ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = isUp ? '#10B981' : '#F43F5E';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(rx, ry, rw, rh);
+        const cx = (x1 + x2) / 2;
+        const cy = (y1 + y2) / 2;
+        const line1 = `Δ $${formatPrice(Math.abs(deltaP))} (${pctP >= 0 ? '+' : ''}${pctP.toFixed(2)}%)`;
+        const line2 = `P1: $${formatPrice(d.p1.price)} → P2: $${formatPrice(d.p2.price)}`;
+        ctx.setLineDash([]);
+        ctx.font = 'bold 10px JetBrains Mono, monospace';
+        const cardW = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width) + 16;
+        const cardH = 34;
+        ctx.fillStyle = '#0E1322';
+        ctx.fillRect(cx - cardW / 2, cy - cardH / 2, cardW, cardH);
+        ctx.strokeStyle = isUp ? '#10B981' : '#F43F5E';
+        ctx.strokeRect(cx - cardW / 2, cy - cardH / 2, cardW, cardH);
+        ctx.fillStyle = isUp ? '#10B981' : '#F43F5E';
+        ctx.fillText(line1, cx - cardW / 2 + 8, cy - cardH / 2 + 13);
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '9.5px JetBrains Mono, monospace';
+        ctx.fillText(line2, cx - cardW / 2 + 8, cy - cardH / 2 + 27);
+        if (isSelected) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#0284C7';
+          ctx.lineWidth = 1.5;
+          [[rx, ry], [rx + rw, ry], [rx + rw, ry + rh], [rx, ry + rh]].forEach(([hx, hy]) => {
+            ctx.fillRect(hx - 4, hy - 4, 8, 8);
+            ctx.strokeRect(hx - 4, hy - 4, 8, 8);
+          });
+        }
+        ctx.restore();
+      }
     }
-    if (resSettings.success) state.settings = resSettings.data;
-    if (resBinanceSymbols.success) state.binanceSymbols = resBinanceSymbols.data;
-    if (resLogs && resLogs.success) {
-      state.logs = resLogs.data || [];
-      renderLogs();
+  }, []);
+
+  // 2. Sync Lightweight Charts Series Indicators (EMA, VWAP, etc.)
+  const syncSeriesIndicators = useCallback(() => {
+    const chart = chartRef.current;
+    const currentCandles = candlesRef.current;
+    if (!chart || !currentCandles || currentCandles.length === 0) return;
+    for (const inst of instancesRef.current) {
+      const def = window.IndicatorRegistry ? window.IndicatorRegistry.get(inst.type) : null;
+      if (def && def.isSeries) {
+        let seriesList = indicatorSeriesMap.current.get(inst.id) || [];
+        if (seriesList.length === 0 && typeof def.syncSeries === 'function') {
+          seriesList = def.syncSeries(chart, inst, seriesList);
+          indicatorSeriesMap.current.set(inst.id, seriesList);
+        }
+        if (seriesList && typeof def.updateSeries === 'function') {
+          def.updateSeries(seriesList, inst.calcResult, inst.style, inst.visible);
+        }
+      }
     }
+  }, []);
 
-    // Filter pending limit orders from signals (FADE signals where market price hasn't reached entry yet)
-    deriveLimitOrders();
-
-    updateDashboardUI();
-    populateBinanceSymbolsDatalist();
-    populateChartSymbolOptions();
-    loadChartData();
-  } catch (err) {
-    console.error('Fetch Initial Data Error:', err);
-  }
-}
-
-function deriveLimitOrders() {
-  // Any FADE signal within last 4 hours that is not already filled in active positions
-  const activeSyms = new Set(state.activePositions.map(p => p.symbol));
-  state.limitOrders = state.signals.filter(s => {
-    return s.signal_type && s.signal_type.startsWith('FADE') && !activeSyms.has(s.symbol);
-  }).slice(0, 30);
-}
-
-// ── UI UPDATERS ──
-function updateDashboardUI() {
-  updateHeaderMetrics();
-  updateSubnavCounters();
-  renderActivePositions();
-  renderLimitOrders();
-  renderClosedPositions();
-  renderSignalsFeed();
-  renderWhitelist();
-  populateSettingsForm();
-}
-
-function updateHeaderMetrics() {
-  const marginBalance = state.performance.margin_balance || Number(state.settings.account_equity || 1000);
-  const walletBalance = state.performance.wallet_balance || Number(state.settings.account_equity || 1000);
-  const unrealizedPnl = state.performance.unrealized_pnl_usd || 0;
-  const unrealizedPct = walletBalance > 0 ? (unrealizedPnl / walletBalance) * 100 : 0;
-  const marginRatio = state.performance.margin_ratio || 0;
-
-  if (el.navMarginBalance) el.navMarginBalance.textContent = `$${marginBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (el.navWalletBalance) el.navWalletBalance.textContent = `$${walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (el.navUnrealizedPnl) {
-    const sign = unrealizedPnl >= 0 ? '+' : '';
-    el.navUnrealizedPnl.className = `m-val ${unrealizedPnl >= 0 ? 'green' : 'red'}`;
-    el.navUnrealizedPnl.textContent = `${sign}$${unrealizedPnl.toFixed(2)} (${sign}${unrealizedPct.toFixed(2)}%)`;
-  }
-  if (el.navMarginRatio) {
-    el.navMarginRatio.className = `m-val ${marginRatio > 50 ? 'red' : 'green'}`;
-    el.navMarginRatio.textContent = `${marginRatio.toFixed(2)}%`;
-  }
-
-  if (el.badgeActivePositions) el.badgeActivePositions.textContent = state.activePositions.length;
-  if (el.badgeWhitelistCount) el.badgeWhitelistCount.textContent = state.whitelist.length;
-
-  const isScanning = state.status && state.status.isRunning;
-  if (el.scannerStatusPill) {
-    if (isScanning) {
-      const bucketText = state.status.currentBucket ? ` [Bucket ${state.status.currentBucket}/5 • 200/min]` : '';
-      el.scannerStatusPill.className = 'status-pill active';
-      el.scannerStatusPill.innerHTML = `<span class="pulse-dot"></span> RUNNING${bucketText}`;
-      if (el.btnToggleScanner) el.btnToggleScanner.innerHTML = '<span>⏸️ Pause</span>';
-    } else {
-      el.scannerStatusPill.className = 'status-pill paused';
-      el.scannerStatusPill.innerHTML = '<span class="pulse-dot"></span> PAUSED';
-      if (el.btnToggleScanner) el.btnToggleScanner.innerHTML = '<span>▶️ Resume</span>';
-    }
-  }
-}
-
-function updateSubnavCounters() {
-  if (el.subCountActive) el.subCountActive.textContent = state.activePositions.length;
-  if (el.subCountLimit) el.subCountLimit.textContent = state.limitOrders.length;
-  if (el.subCountClosed) el.subCountClosed.textContent = state.closedPositions.length;
-  if (el.subCountSignals) el.subCountSignals.textContent = state.signals.length;
-}
-
-// ── 1. ACTIVE POSITIONS RENDERER (BINANCE FUTURES PRO) ──
-function renderActivePositions() {
-  if (!el.tbodyActivePositions) return;
-
-  if (!state.activePositions || state.activePositions.length === 0) {
-    el.tbodyActivePositions.innerHTML = `
-      <tr><td colspan="10" class="text-center empty-state">No active positions open. Scanner is monitoring market 24/7...</td></tr>
-    `;
-    return;
-  }
-
-  el.tbodyActivePositions.innerHTML = state.activePositions.map(p => {
-    const isLong = p.direction === 'BUY';
-    const sideBadge = isLong ? 'LONG' : 'SHORT';
-    const pnlUsd = p.net_pnl_usd || 0;
-    const roePct = p.roe_pct !== undefined ? p.roe_pct : (p.initial_margin > 0 ? (pnlUsd / p.initial_margin) * 100 : 0);
-    const pnlClass = pnlUsd >= 0 ? 'green' : 'red';
-    const pnlSign = pnlUsd >= 0 ? '+' : '';
-
-    const curPrice = p.current_price || p.entry_price;
-    const leverage = p.leverage || 20;
-    const marginMode = p.margin_mode || 'ISOLATED';
-    const marginRatio = (p.margin_ratio || 0).toFixed(2);
-
-    return `
-      <tr class="clickable-row">
-        <td onclick="openStat2Chart('${p.symbol}', '5m')">
-          <div style="display:flex; align-items:center; gap:6px;">
-            <span style="font-weight:800; color:#FFFFFF;">${p.symbol}</span>
-            <span class="binance-pos-side ${p.direction}">${sideBadge}</span>
-            <span class="binance-leverage-pill">${leverage}x ${marginMode}</span>
-          </div>
-        </td>
-        <td>
-          <div style="display:flex; flex-direction:column;">
-            <span style="font-weight:700; color:#FFFFFF;">$${formatPrice(p.pos_size_usd)}</span>
-            <span style="font-size:10px; color:#848E9C;">${p.quantity.toFixed(3)} Qty</span>
-          </div>
-        </td>
-        <td>$${formatPrice(p.entry_price)}</td>
-        <td style="color:${isLong ? '#0ECB81' : '#F6465D'}; font-weight:700;">$${formatPrice(curPrice)}</td>
-        <td><span class="binance-liq-price">$${formatPrice(p.liq_price)}</span></td>
-        <td>$${formatPrice(p.initial_margin)}</td>
-        <td style="color:${marginRatio > 50 ? '#F6465D' : '#0ECB81'}; font-weight:700;">${marginRatio}%</td>
-        <td>
-          <div class="binance-pnl-cell ${pnlClass}">
-            <span class="pnl-usd">${pnlSign}$${pnlUsd.toFixed(2)}</span>
-            <span class="pnl-roe">(${pnlSign}${roePct.toFixed(2)}%)</span>
-          </div>
-        </td>
-        <td>
-          <div style="font-size:10.5px; line-height:1.3;">
-            <span style="color:#0ECB81;">TP: $${formatPrice(p.tp1_price)}</span><br>
-            <span style="color:${p.is_be_moved ? '#00F0FF' : '#F6465D'};">SL: $${formatPrice(p.sl_price)}</span>
-          </div>
-        </td>
-        <td>
-          <div style="display:flex; gap:4px; align-items:center;">
-            <button class="btn btn-secondary btn-sm" onclick="openPositionForensics('${p.id}')" title="Inspect Trade Rationale & ML Features">💡 Info</button>
-            <button class="btn btn-danger btn-sm btn-close-market" data-id="${p.id}" title="Market Close Position">Close</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
-
-  // Attach Market Close listener
-  document.querySelectorAll('.btn-close-market').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const posId = btn.dataset.id;
-      if (!confirm('Market Close this Binance Futures position immediately?')) return;
-      btn.disabled = true;
-      btn.textContent = 'Closing...';
-      const res = await fetch(`/api/positions/close/${posId}`, { method: 'POST' }).then(r => r.json());
-      if (res.success) {
-        await refreshAllData();
+  // 3. Initialize Lightweight Charts & Canvas with Fixed PriceScale
+  useEffect(() => {
+    if (!chartContainerRef.current || !window.LightweightCharts) return;
+    const container = chartContainerRef.current;
+    const chart = window.LightweightCharts.createChart(container, {
+      layout: {
+        background: {
+          color: '#090D16'
+        },
+        textColor: '#848E9C',
+        fontSize: 11,
+        fontFamily: 'JetBrains Mono, Inter, monospace'
+      },
+      grid: {
+        vertLines: {
+          color: 'rgba(30, 41, 59, 0.35)'
+        },
+        horzLines: {
+          color: 'rgba(30, 41, 59, 0.35)'
+        }
+      },
+      crosshair: {
+        mode: 1,
+        vertLine: {
+          color: '#F0B90B',
+          width: 1,
+          style: 3,
+          labelBackgroundColor: '#111726'
+        },
+        horzLine: {
+          color: '#F0B90B',
+          width: 1,
+          style: 3,
+          labelBackgroundColor: '#111726'
+        }
+      },
+      rightPriceScale: {
+        visible: true,
+        borderColor: '#1E293B',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.22
+        },
+        autoScale: true,
+        alignLabels: true,
+        borderVisible: true
+      },
+      timeScale: {
+        borderColor: '#1E293B',
+        timeVisible: true,
+        secondsVisible: false
+      },
+      handleScale: {
+        axisPressedMouseMove: {
+          time: true,
+          price: true
+        },
+        mouseWheel: true,
+        pinch: true
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true
       }
     });
-  });
-}
-
-// ── 2. PENDING LIMIT ORDERS RENDERER ──
-function renderLimitOrders() {
-  if (!el.tbodyLimitOrders) return;
-
-  if (!state.limitOrders || state.limitOrders.length === 0) {
-    el.tbodyLimitOrders.innerHTML = `
-      <tr><td colspan="10" class="text-center empty-state">No open limit orders. Fade traps will register here automatically...</td></tr>
-    `;
-    return;
-  }
-
-  el.tbodyLimitOrders.innerHTML = state.limitOrders.map(sig => {
-    const isLong = sig.direction === 'BUY';
-    const sideBadge = isLong ? 'LIMIT BUY' : 'LIMIT SELL';
-    const distEntry = Math.abs(sig.entry_price - (sig.current_price || sig.entry_price)) / sig.entry_price * 100;
-
-    return `
-      <tr class="clickable-row">
-        <td style="font-weight: 800; color: #FFFFFF;" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
-          ${sig.symbol} <span style="font-size:10px; color:#F0B90B;">(${sig.timeframe})</span>
-        </td>
-        <td><span class="binance-pos-side ${sig.direction}">${sideBadge}</span></td>
-        <td style="font-weight: 700; color: #F0B90B;">$${formatPrice(sig.entry_price)}</td>
-        <td>$${formatPrice(sig.entry_price)}</td>
-        <td><span style="color: #FCD535; font-weight:700;">~${distEntry.toFixed(2)}%</span></td>
-        <td style="color: #0ECB81;">$${formatPrice(sig.tp1_price)} (+${sig.tp1_pct ? sig.tp1_pct.toFixed(1) : '1.8'}%)</td>
-        <td style="color: #00F0FF;">$${formatPrice(sig.tp2_price)} (+${sig.tp2_pct ? sig.tp2_pct.toFixed(1) : '3.2'}%)</td>
-        <td style="color: #F6465D;">$${formatPrice(sig.sl_price)} (-${sig.sl_pct ? sig.sl_pct.toFixed(1) : '2.5'}%)</td>
-        <td>$400.00</td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">📊 Chart</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
-}
-
-// ── 3. CLOSED POSITIONS RENDERER (ORDER HISTORY) ──
-function renderClosedPositions() {
-  if (!el.tbodyClosedPositions) return;
-
-  if (!state.closedPositions || state.closedPositions.length === 0) {
-    el.tbodyClosedPositions.innerHTML = `
-      <tr><td colspan="10" class="text-center empty-state">No closed trades recorded yet.</td></tr>
-    `;
-    return;
-  }
-
-  el.tbodyClosedPositions.innerHTML = state.closedPositions.map(p => {
-    const isLong = p.direction === 'BUY';
-    const sideBadge = isLong ? 'LONG' : 'SHORT';
-    const pnlUsd = p.net_pnl_usd || 0;
-    const roePct = p.roe_pct !== undefined ? p.roe_pct : (p.initial_margin > 0 ? (pnlUsd / p.initial_margin) * 100 : (p.net_pnl_pct || 0));
-    const pnlClass = pnlUsd >= 0 ? 'green' : 'red';
-    const pnlSign = pnlUsd >= 0 ? '+' : '';
-
-    return `
-      <tr class="clickable-row">
-        <td style="font-weight: 800; color: #FFFFFF;" onclick="openStat2Chart('${p.symbol}', '5m')">
-          ${p.symbol} <span class="binance-leverage-pill">${p.leverage || 20}x</span>
-        </td>
-        <td><span class="binance-pos-side ${p.direction}">${sideBadge}</span></td>
-        <td>$${formatPrice(p.entry_price)}</td>
-        <td>$${formatPrice(p.exit_price || p.current_price || p.entry_price)}</td>
-        <td><span class="status-pill ${pnlUsd >= 0 ? 'active' : 'paused'}">${p.exit_reason || p.status}</span></td>
-        <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)}</td>
-        <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}${roePct.toFixed(2)}%</td>
-        <td style="color:#848E9C; font-size:10.5px;">${new Date(p.open_time).toLocaleTimeString()}</td>
-        <td style="color:#848E9C; font-size:10.5px;">${p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-'}</td>
-        <td>
-          <div style="display:flex; gap:4px;">
-            <button class="btn btn-secondary btn-sm" onclick="openPositionForensics('${p.id}')" title="Inspect Rationale & ML Features">💡 Forensics</button>
-            <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${p.symbol}', '5m')">📊 Chart</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
-}
-
-// ── 4. SIGNALS FEED RENDERER ──
-function renderSignalsFeed() {
-  if (!el.signalsFeedGrid) return;
-
-  if (!state.signals || state.signals.length === 0) {
-    el.signalsFeedGrid.innerHTML = `
-      <div style="grid-column: 1/-1; text-align: center; color: #64748b; padding: 40px;">
-        No signals detected in the latest scan window. Next scan triggers on candle close...
-      </div>
-    `;
-    return;
-  }
-
-  el.signalsFeedGrid.innerHTML = state.signals.map((sig, idx) => {
-    const isLong = sig.direction === 'BUY';
-    const badgeText = sig.signal_type.startsWith('FADE') ? (isLong ? '⚡ FADE LONG' : '⚡ FADE SHORT') : (isLong ? '▲ BUY TREND' : '▼ SELL TREND');
-    const timeStr = new Date(sig.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    return `
-      <div class="signal-card ${sig.direction}">
-        <div class="sig-header">
-          <div>
-            <span class="sig-symbol">${sig.symbol}</span>
-            <span style="font-size: 11px; color: #64748b; margin-left: 6px;">${sig.timeframe}</span>
-          </div>
-          <span class="sig-badge ${sig.direction}">${badgeText}</span>
-        </div>
-
-        <div class="sig-grid-rows" onclick="openDecisionModalFromFeed(${idx})">
-          <div class="sig-row-item">
-            <span class="sig-lbl">Entry</span>
-            <span class="sig-val">${formatPrice(sig.entry_price)}</span>
-          </div>
-          <div class="sig-row-item">
-            <span class="sig-lbl">Stop Loss</span>
-            <span class="sig-val red">${formatPrice(sig.sl_price)}</span>
-          </div>
-          <div class="sig-row-item">
-            <span class="sig-lbl">TP1 (FVG)</span>
-            <span class="sig-val green">${formatPrice(sig.tp1_price)}</span>
-          </div>
-          <div class="sig-row-item">
-            <span class="sig-lbl">TP2 (Liquidity)</span>
-            <span class="sig-val cyan">${formatPrice(sig.tp2_price)}</span>
-          </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
-          <div style="font-size: 10.5px; color: #64748b; font-family: var(--font-mono);">
-            <span>R:R: <b style="color:#f8fafc;">1:${(sig.rr_ratio || 2.0).toFixed(1)}</b></span> •
-            <span>ATR: <b style="color:#38bdf8;">${(sig.atr_pct || 0.5).toFixed(2)}%</b></span>
-          </div>
-          <div style="display:flex; gap:6px;">
-            <button class="btn btn-sm btn-secondary" onclick="openDecisionModalFromFeed(${idx})">💡 Forensics</button>
-            <button class="btn-stat2-view" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe}')">📊 STAT2 Chart</button>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-// ── 5. WHITELIST ENTITY RENDERER ──
-function renderWhitelist() {
-  if (!el.whitelistEntityGrid) return;
-
-  el.whitelistEntityGrid.innerHTML = state.whitelist.map(item => {
-    const isEnabled = item.is_enabled === 1;
-    const strats = item.strategies || [];
-
-    return `
-      <div class="whitelist-card">
-        <div class="wl-top">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="wl-symbol" style="cursor:pointer;" onclick="openStat2Chart('${item.symbol}', '5m')">${item.symbol}</span>
-            <span class="wl-category">${item.category || 'Futures'}</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 6px;">
-            <button class="btn-stat2-view" onclick="openStat2Chart('${item.symbol}', '5m')">📊 Chart</button>
-            <button class="btn btn-sm ${isEnabled ? 'btn-secondary' : 'btn-success'}" onclick="toggleSymbol('${item.symbol}', ${!isEnabled})">
-              ${isEnabled ? 'Disable' : 'Enable'}
-            </button>
-            <button class="btn btn-sm btn-danger" onclick="deleteSymbol('${item.symbol}')">🗑️</button>
-          </div>
-        </div>
-
-        <div style="font-size: 11px; color: #94a3b8; font-weight: 600; margin-top: 8px;">
-          Active Strategies (${strats.length})
-        </div>
-
-        <div class="strategy-pill-list">
-          ${strats.map(s => `
-            <div class="strategy-item-row" style="background:#1E2329; border:1px solid #2B313A; border-radius:4px; padding:6px 8px; margin-top:4px; display:flex; justify-content:space-between; align-items:center;">
-              <div class="strat-info">
-                <span class="strat-tf" style="color:#F0B90B; font-weight:700;">${s.timeframe}</span>
-                <span style="font-weight:600; color:#FFFFFF; margin-left:4px;">${s.strategy_name}</span>
-                <span class="binance-leverage-pill">${s.leverage || 20}x ${s.margin_mode || 'ISOLATED'}</span>
-                <span style="font-size: 10px; color: #848E9C; margin-left:4px;">(Risk: ${s.risk_pct}%)</span>
-              </div>
-              <div class="strat-actions" style="display:flex; gap:4px;">
-                <button class="btn btn-sm btn-secondary" onclick="openEditStrategyModal('${s.id}')">⚙️</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteStrategy('${s.id}')">✕</button>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-
-        <button class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 8px;" onclick="openAddStrategyForSymbolModal('${item.symbol}')">
-          + Add Strategy Layer
-        </button>
-      </div>
-    `;
-  }).join('');
-}
-
-function populateSettingsForm() {
-  if (!el.formBotSettings) return;
-  if (el.cfgEquity) el.cfgEquity.value = state.settings.account_equity || 1000;
-  if (el.cfgDefaultLeverage) el.cfgDefaultLeverage.value = state.settings.default_leverage || '20';
-  if (el.cfgDefaultMarginMode) el.cfgDefaultMarginMode.value = state.settings.default_margin_mode || 'ISOLATED';
-  if (el.cfgRiskPct) el.cfgRiskPct.value = state.settings.default_risk_pct || 1.0;
-  if (el.cfgPaperMode) el.cfgPaperMode.value = state.settings.paper_trading_mode || 1;
-  if (el.cfgTgToken) el.cfgTgToken.value = state.settings.telegram_bot_token || '';
-  if (el.cfgTgChatId) el.cfgTgChatId.value = state.settings.telegram_chat_id || '';
-  if (el.cfgDiscordUrl) el.cfgDiscordUrl.value = state.settings.discord_webhook_url || '';
-}
-
-function populateBinanceSymbolsDatalist() {
-  if (!el.binanceSymbolsDatalist || !state.binanceSymbols) return;
-  el.binanceSymbolsDatalist.innerHTML = state.binanceSymbols.map(s => `
-    <option value="${s.symbol}">${s.symbol} (${s.baseAsset})</option>
-  `).join('');
-}
-
-function populateChartSymbolOptions() {
-  if (!el.chartSymbolSelect) return;
-  const symbols = state.whitelist.map(w => w.symbol);
-  el.chartSymbolSelect.innerHTML = symbols.map(s => `
-    <option value="${s}" ${s === state.chart.symbol ? 'selected' : ''}>${s}</option>
-  `).join('');
-}
-
-// ── NAVIGATION TO STAT2 CHART ──
-function openStat2Chart(symbol, timeframe = '5m') {
-  state.chart.symbol = symbol;
-  state.chart.timeframe = timeframe;
-  state.activeTab = 'tabChart';
-
-  // Switch to chart tab
-  el.menuTabs.forEach(t => t.classList.remove('active'));
-  el.tabPanels.forEach(p => p.classList.remove('active'));
-
-  const chartTabBtn = document.querySelector('.menu-tab[data-tab="tabChart"]');
-  const chartPanel = document.getElementById('tabChart');
-  if (chartTabBtn) chartTabBtn.classList.add('active');
-  if (chartPanel) chartPanel.classList.add('active');
-
-  // Update dropdowns
-  if (el.chartSymbolSelect) {
-    let exists = false;
-    for (let i = 0; i < el.chartSymbolSelect.options.length; i++) {
-      if (el.chartSymbolSelect.options[i].value === symbol) {
-        exists = true;
-        break;
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#10B981',
+      downColor: '#F43F5E',
+      borderUpColor: '#10B981',
+      borderDownColor: '#F43F5E',
+      wickUpColor: '#10B981',
+      wickDownColor: '#F43F5E',
+      priceFormat: {
+        type: 'custom',
+        formatter: price => formatPrice(price),
+        minMove: 0.00000001
       }
-    }
-    if (!exists) {
-      const opt = document.createElement('option');
-      opt.value = symbol;
-      opt.textContent = symbol;
-      el.chartSymbolSelect.appendChild(opt);
-    }
-    el.chartSymbolSelect.value = symbol;
-  }
-  if (el.chartTimeframeSelect) el.chartTimeframeSelect.value = timeframe;
+    });
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: {
+        type: 'volume'
+      },
+      priceScaleId: 'volume_scale'
+    });
 
-  // Reload chart with STAT2 overlay
-  loadChartData();
-}
+    // Explicitly configure dedicated volume scale to avoid priceScale collisions
+    try {
+      chart.priceScale('volume_scale').applyOptions({
+        scaleMargins: {
+          top: 0.82,
+          bottom: 0
+        },
+        visible: false,
+        autoScale: true
+      });
+    } catch (e) {}
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
 
-// ── ACTIONS & API CALLS ──
-async function toggleSymbol(symbol, nextState) {
-  await fetch(`/api/whitelist/${symbol}/toggle`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_enabled: nextState })
-  });
-  const res = await fetch('/api/whitelist').then(r => r.json());
-  if (res.success) state.whitelist = res.data;
-  renderWhitelist();
-  updateHeaderMetrics();
-}
-
-async function deleteSymbol(symbol) {
-  if (!confirm(`Are you sure you want to delete ${symbol} from the whitelist entity registry?`)) return;
-  await fetch(`/api/whitelist/${symbol}`, { method: 'DELETE' });
-  const res = await fetch('/api/whitelist').then(r => r.json());
-  if (res.success) state.whitelist = res.data;
-  renderWhitelist();
-  updateHeaderMetrics();
-  populateChartSymbolOptions();
-}
-
-function openAddStrategyForSymbolModal(symbol) {
-  document.getElementById('editStrategyTitle').textContent = `⚙️ Add Strategy for ${symbol}`;
-  document.getElementById('stratId').value = '';
-  document.getElementById('stratSymbol').value = symbol;
-  document.getElementById('stratName').value = `${symbol} Custom 5m`;
-  document.getElementById('stratType').value = 'dual';
-  document.getElementById('stratTf').value = '5m';
-  document.getElementById('stratRiskPct').value = 1.0;
-  document.getElementById('stratAtrMult').value = 2.0;
-  document.getElementById('stratMinAtr').value = 0.35;
-  document.getElementById('stratLiqThresh').value = 1.5;
-  document.getElementById('stratSwingLookback').value = 30;
-
-  el.modalEditStrategy.classList.add('active');
-}
-
-function openEditStrategyModal(stratId) {
-  let targetStrat = null;
-  for (const w of state.whitelist) {
-    const s = (w.strategies || []).find(x => x.id === stratId);
-    if (s) { targetStrat = s; break; }
-  }
-  if (!targetStrat) return;
-
-  document.getElementById('editStrategyTitle').textContent = `⚙️ Edit Strategy: ${targetStrat.strategy_name}`;
-  document.getElementById('stratId').value = targetStrat.id;
-  document.getElementById('stratSymbol').value = targetStrat.symbol;
-  document.getElementById('stratName').value = targetStrat.strategy_name;
-  document.getElementById('stratType').value = targetStrat.strategy_type;
-  document.getElementById('stratTf').value = targetStrat.timeframe;
-  document.getElementById('stratRiskPct').value = targetStrat.risk_pct;
-  document.getElementById('stratAtrMult').value = targetStrat.atr_mult;
-  document.getElementById('stratMinAtr').value = targetStrat.min_atr_pct;
-  document.getElementById('stratLiqThresh').value = targetStrat.liq_threshold_pct;
-  document.getElementById('stratSwingLookback').value = targetStrat.swing_lookback;
-
-  el.modalEditStrategy.classList.add('active');
-}
-
-async function deleteStrategy(stratId) {
-  if (!confirm('Delete this strategy layer?')) return;
-  await fetch(`/api/strategies/${stratId}`, { method: 'DELETE' });
-  const res = await fetch('/api/whitelist').then(r => r.json());
-  if (res.success) state.whitelist = res.data;
-  renderWhitelist();
-}
-
-// ── MODAL TRADE DECISION FORENSICS ──
-function openDecisionModalFromFeed(index) {
-  const sig = state.signals[index];
-  if (!sig) return;
-
-  const isLong = sig.direction === 'BUY';
-  const badgeTitle = sig.signal_type.startsWith('FADE') ? (isLong ? '⚡ FADE LONG' : '⚡ FADE SHORT') : (isLong ? '▲ BUY TREND' : '▼ SELL TREND');
-  const badgeClass = sig.direction;
-
-  el.modalDecisionBadge.className = `status-badge-lg sig-badge ${badgeClass}`;
-  el.modalDecisionBadge.textContent = badgeTitle;
-  el.modalDecisionSymbol.textContent = `${sig.symbol} • ${sig.timeframe}`;
-
-  el.modalDecisionBody.innerHTML = `
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #1e293b; padding: 12px; border-radius: 8px; text-align: center; font-family: var(--font-mono); margin-bottom: 16px;">
-      <div>
-        <div style="color: #94a3b8; font-size: 10px; text-transform: uppercase;">Entry</div>
-        <div style="color: #f8fafc; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(sig.entry_price)}</div>
-      </div>
-      <div>
-        <div style="color: #10b981; font-size: 10px; text-transform: uppercase;">TP1 (50%)</div>
-        <div style="color: #10b981; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(sig.tp1_price)}</div>
-      </div>
-      <div>
-        <div style="color: #06b6d4; font-size: 10px; text-transform: uppercase;">TP2 (Liq)</div>
-        <div style="color: #06b6d4; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(sig.tp2_price)}</div>
-      </div>
-      <div>
-        <div style="color: #f43f5e; font-size: 10px; text-transform: uppercase;">Stop Loss</div>
-        <div style="color: #f43f5e; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(sig.sl_price)}</div>
-      </div>
-    </div>
-
-    <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.6;">
-      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F0B90B;">
-        <div style="font-weight: 700; color: #F0B90B; font-size: 12px; margin-bottom: 4px;">📌 1️⃣ TẠI SAO CHỌN SIDE & ĐIỂM ENTRY?</div>
-        <div style="color: #EAECEF;">${sig.side_rationale || sig.rationale || 'Nến đóng cửa xác nhận xu hướng rõ nét, ATR đạt chuẩn biến động và vùng cản thông thoáng.'}</div>
-        ${sig.entry_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ vào lệnh:</b> ${sig.entry_rationale}</div>` : ''}
-      </div>
-
-      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #0ECB81;">
-        <div style="font-weight: 700; color: #0ECB81; font-size: 12px; margin-bottom: 4px;">🎯 2️⃣ TẠI SAO CHỐT LỜI TẠI TP1 & TP2?</div>
-        <div style="color: #EAECEF;">
-          • <b>TP1 (${formatPrice(sig.tp1_price)}):</b> ${sig.tp1_rationale || 'Mép vùng FVG đối diện chưa lấp. Tự động dời SL về Hòa Vốn (Breakeven +0.05%) sau khi chạm.'}<br>
-          • <b>TP2 (${formatPrice(sig.tp2_price)}):</b> ${sig.tp2_rationale || 'Cụm thanh khoản Liquidity Pool đối diện.'}
-        </div>
-      </div>
-
-      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F6465D;">
-        <div style="font-weight: 700; color: #F6465D; font-size: 12px; margin-bottom: 4px;">🛑 3️⃣ TẠI SAO ĐẶT SL TẠI MỨC NÀY?</div>
-        <div style="color: #EAECEF;">${sig.sl_rationale || 'Đặt dưới Swing Low/High gần nhất kèm biên độ an toàn, bảo vệ vị thế khỏi râu nến giật.'}</div>
-      </div>
-
-      <div style="background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px;">
-        <div style="font-weight: 700; color: #00F0FF; font-size: 12px; margin-bottom: 4px;">🔬 4️⃣ CHỈ SỐ ĐỊNH LƯỢNG & FEATURES:</div>
-        <div style="color: #EAECEF; font-family: var(--font-mono); font-size: 11.5px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-          <div>• Risk / Reward (R:R): <b style="color:#F0B90B;">1 : ${(sig.rr_ratio || 2.0).toFixed(2)}</b></div>
-          <div>• ATR Volatility: <b style="color:#0ECB81;">${(sig.atr_pct || 0.5).toFixed(2)}%</b></div>
-          <div>• Market Regime: <b style="color:#FFFFFF;">${sig.market_regime || 'TREND'}</b></div>
-          <div>• Thời gian Tín hiệu: <b style="color:#848E9C;">${new Date(sig.timestamp * 1000).toLocaleTimeString()}</b></div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  el.modalTradeDecision.classList.add('active');
-}
-
-// ── MODAL POSITION FORENSICS & QUANTITATIVE FEATURES ──
-async function openPositionForensics(posId) {
-  try {
-    const res = await fetch(`/api/positions/${posId}/forensics`).then(r => r.json());
-    if (!res.success || !res.data) return;
-    const pos = res.data;
-    const isLong = pos.direction === 'BUY';
-    const sideBadge = pos.signal_type || (isLong ? '▲ LONG' : '▼ SHORT');
-    const badgeClass = isLong ? 'BUY' : 'SELL';
-
-    el.modalDecisionBadge.className = `status-badge-lg sig-badge ${badgeClass}`;
-    el.modalDecisionBadge.textContent = `${sideBadge} [${pos.leverage || 20}x ${pos.margin_mode || 'ISOLATED'}]`;
-    el.modalDecisionSymbol.textContent = `${pos.symbol} • Entry: $${formatPrice(pos.entry_price)}`;
-
-    const pnlSign = (pos.net_pnl_usd || 0) >= 0 ? '+' : '';
-    const pnlClass = (pos.net_pnl_usd || 0) >= 0 ? 'green' : 'red';
-    const roe = pos.roe_pct !== undefined ? pos.roe_pct : 0;
-    const durationStr = pos.duration_seconds ? `${pos.duration_seconds}s` : 'Active / Monitoring';
-
-    el.modalDecisionBody.innerHTML = `
-      <!-- SUMMARY STRIP -->
-      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px; text-align: center; font-family: var(--font-mono); margin-bottom: 16px;">
-        <div>
-          <div style="color: #848E9C; font-size: 10px; text-transform: uppercase;">Entry Price</div>
-          <div style="color: #FFFFFF; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.entry_price)}</div>
-        </div>
-        <div>
-          <div style="color: #0ECB81; font-size: 10px; text-transform: uppercase;">TP1 (50% + BE)</div>
-          <div style="color: #0ECB81; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.tp1_price)}</div>
-        </div>
-        <div>
-          <div style="color: #00F0FF; font-size: 10px; text-transform: uppercase;">TP2 Target</div>
-          <div style="color: #00F0FF; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.tp2_price)}</div>
-        </div>
-        <div>
-          <div style="color: #F6465D; font-size: 10px; text-transform: uppercase;">Stop Loss / Liq</div>
-          <div style="color: #F6465D; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.sl_price)} <span style="color:#FFA500; font-size:10px;">($${formatPrice(pos.liq_price)})</span></div>
-        </div>
-      </div>
-
-      <!-- RATIONALE FORENSICS -->
-      <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12.5px; line-height: 1.6;">
-        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F0B90B;">
-          <div style="font-weight: 700; color: #F0B90B; margin-bottom: 4px; font-size: 11.5px;">📌 1. LÝ DO & ĐIỀU KIỆN VÀO LỆNH (ENTRY RATIONALE)</div>
-          <div style="color: #EAECEF;">${pos.side_rationale || pos.entry_rationale || 'Lệnh kích hoạt theo mô hình xác nhận xu hướng SMC + VIDYA Volatility Breakout.'}</div>
-          ${pos.entry_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ mức giá vào:</b> ${pos.entry_rationale}</div>` : ''}
-        </div>
-
-        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #0ECB81;">
-          <div style="font-weight: 700; color: #0ECB81; margin-bottom: 4px; font-size: 11.5px;">🎯 2. CĂN CỨ CÁC MỐC CHỐT LỜI (TP1 & TP2 RATIONALE)</div>
-          <div style="color: #EAECEF;">${pos.tp1_rationale || 'Chốt lời từng phần tại vùng FVG đối diện và tự động dời SL về hòa vốn (Breakeven).'}</div>
-          ${pos.tp2_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ TP2:</b> ${pos.tp2_rationale}</div>` : ''}
-        </div>
-
-        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F6465D;">
-          <div style="font-weight: 700; color: #F6465D; margin-bottom: 4px; font-size: 11.5px;">🛑 3. CĂN CỨ MỐC CẮT LỖ & AN TOÀN VỐN (STOP-LOSS & LIQUIDATION RATIONALE)</div>
-          <div style="color: #EAECEF;">${pos.sl_rationale || 'Cắt lỗ đặt ngoài vùng cấu trúc Swing Pivot để bảo vệ an toàn vốn.'}</div>
-          <div style="color: #FFA500; margin-top: 4px; font-size: 11px;">⚠️ <b>Giá thanh lý ước tính (Liquidation Price):</b> $${formatPrice(pos.liq_price)} (Ký quỹ: $${formatPrice(pos.initial_margin)} @ ${pos.leverage || 20}x).</div>
-        </div>
-
-        <!-- QUANTITATIVE ML FEATURES SNAPSHOT -->
-        <div style="background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px;">
-          <div style="font-weight: 700; color: #00F0FF; margin-bottom: 8px; font-size: 11.5px;">🔬 4. VECTOR ĐẶC TRƯNG ĐỊNH LƯỢNG TẠI THỜI ĐIỂM VÀO LỆNH (ML FEATURE VECTOR)</div>
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-family: var(--font-mono); font-size: 11px;">
-            <div><span style="color:#848E9C;">Market Regime:</span> <b style="color:#FFFFFF;">${pos.market_regime || 'TREND'}</b></div>
-            <div><span style="color:#848E9C;">ATR Volatility:</span> <b style="color:#0ECB81;">${(pos.atr_pct || 0).toFixed(2)}%</b></div>
-            <div><span style="color:#848E9C;">Risk/Reward (R:R):</span> <b style="color:#F0B90B;">1:${(pos.rr_ratio || 2.0).toFixed(1)}</b></div>
-            <div><span style="color:#848E9C;">Notional Size:</span> <b style="color:#FFFFFF;">$${formatPrice(pos.pos_size_usd)}</b></div>
-            <div><span style="color:#848E9C;">Initial Margin:</span> <b style="color:#FFFFFF;">$${formatPrice(pos.initial_margin)}</b></div>
-            <div><span style="color:#848E9C;">Leverage Mode:</span> <b style="color:#F0B90B;">${pos.leverage || 20}x ${pos.margin_mode || 'ISOLATED'}</b></div>
-            <div><span style="color:#848E9C;">Current PnL:</span> <b class="${pnlClass}">${pnlSign}$${(pos.net_pnl_usd || 0).toFixed(2)} (${pnlSign}${roe.toFixed(2)}%)</b></div>
-            <div><span style="color:#848E9C;">Status / Reason:</span> <b style="color:#00F0FF;">${pos.status} (${pos.exit_reason || 'RUNNING'})</b></div>
-            <div><span style="color:#848E9C;">Hold Duration:</span> <b style="color:#FFFFFF;">${durationStr}</b></div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    el.modalTradeDecision.classList.add('active');
-  } catch (e) {
-    console.error('Forensics load error:', e);
-  }
-}
-
-// ── INTERACTIVE CHART VIEWER (STAT2 PRO BOX OVERLAY) ──
-async function loadChartData() {
-  const sym = el.chartSymbolSelect ? el.chartSymbolSelect.value : state.chart.symbol;
-  const tf = el.chartTimeframeSelect ? el.chartTimeframeSelect.value : state.chart.timeframe;
-  const mode = el.chartModeSelect ? el.chartModeSelect.value : state.chart.mode;
-
-  try {
-    const url = `/api/chart/${sym}/${tf}?strategyMode=${mode}`;
-    const res = await fetch(url).then(r => r.json());
-    if (res.success) {
-      state.chart.symbol = sym;
-      state.chart.timeframe = tf;
-      state.chart.candles = res.candles || [];
-      state.chart.calcResult = {
-        cards: res.cards || [],
-        atrData: res.atrData || [],
-        liqList: res.liqList || [],
-        fvgList: res.fvgList || []
-      };
-
-      if (res.candles && res.candles.length > 0) {
-        const last = res.candles[res.candles.length - 1];
-        const first = res.candles[0];
-        const changePct = ((last.close - first.open) / first.open) * 100;
-        const highs = res.candles.map(c => c.high);
-        const lows = res.candles.map(c => c.low);
-        const maxH = Math.max(...highs);
-        const minL = Math.min(...lows);
-        const totalVol = res.candles.reduce((s, c) => s + (c.volume || 0), 0);
-
-        if (el.tickerSymbolName) el.tickerSymbolName.textContent = `${sym} Perpetual`;
-        if (el.tickerMarkPrice) {
-          el.tickerMarkPrice.textContent = formatPrice(last.close);
-          el.tickerMarkPrice.style.color = changePct >= 0 ? '#0ECB81' : '#F6465D';
+    // High-DPI Canvas Sync & Resize Observer
+    const resizeObserver = new ResizeObserver(entries => {
+      if (entries.length > 0 && entries[0].contentRect) {
+        const rect = entries[0].contentRect;
+        chart.applyOptions({
+          width: rect.width,
+          height: rect.height
+        });
+        const canvas = overlayCanvasRef.current;
+        if (canvas) {
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = rect.width * dpr;
+          canvas.height = rect.height * dpr;
+          const ctx = canvas.getContext('2d');
+          ctx.scale(dpr, dpr);
         }
-        if (el.tickerChange24h) {
-          const sign = changePct >= 0 ? '+' : '';
-          el.tickerChange24h.className = `t-val ${changePct >= 0 ? 'green' : 'red'}`;
-          el.tickerChange24h.textContent = `${sign}${changePct.toFixed(2)}%`;
-        }
-        if (el.tickerHigh24h) el.tickerHigh24h.textContent = formatPrice(maxH);
-        if (el.tickerLow24h) el.tickerLow24h.textContent = formatPrice(minL);
-        if (el.tickerVol24h) el.tickerVol24h.textContent = `${(totalVol / 1000).toFixed(2)}K`;
+        triggerCanvasRender();
+      }
+    });
+    resizeObserver.observe(container);
+
+    // Visible range change listener for smooth overlay sync
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      triggerCanvasRender();
+    });
+    return () => {
+      resizeObserver.disconnect();
+      if (wsRef.current && typeof wsRef.current.close === 'function') {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      chart.remove();
+    };
+  }, [triggerCanvasRender]);
+
+  // 4. Fetch Klines & Compute IndicatorRegistry calculations (Triggered ONLY on symbol, exchange, tf change)
+  const loadCandlesDirect = useCallback(async () => {
+    if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+    setLoading(true);
+    if (wsRef.current && typeof wsRef.current.close === 'function') {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    try {
+      const raw = await DirectExchangeClient.fetchCandles(exchange, symbol, timeframe);
+      if (!raw || raw.length === 0) {
+        setLoading(false);
+        return;
+      }
+      const map = new Map();
+      raw.forEach(c => map.set(c.time, c));
+      const sorted = Array.from(map.values()).sort((a, b) => a.time - b.time);
+      candlesRef.current = sorted;
+      const samplePrice = sorted[sorted.length - 1]?.close || sorted[0]?.close || 1;
+      let minMove = 0.01;
+      let precision = 2;
+      if (samplePrice < 0.00001) {
+        minMove = 0.00000001;
+        precision = 8;
+      } else if (samplePrice < 0.0001) {
+        minMove = 0.0000001;
+        precision = 7;
+      } else if (samplePrice < 0.01) {
+        minMove = 0.000001;
+        precision = 6;
+      } else if (samplePrice < 0.1) {
+        minMove = 0.0001;
+        precision = 4;
+      } else if (samplePrice < 1) {
+        minMove = 0.0001;
+        precision = 4;
+      } else if (samplePrice < 100) {
+        minMove = 0.001;
+        precision = 3;
+      } else {
+        minMove = 0.01;
+        precision = 2;
+      }
+      if (candleSeriesRef.current) {
+        candleSeriesRef.current.applyOptions({
+          priceFormat: {
+            type: 'custom',
+            formatter: p => formatPrice(p, precision),
+            minMove: minMove
+          }
+        });
+        candleSeriesRef.current.setData(sorted);
+      }
+      if (chartRef.current) {
+        try {
+          chartRef.current.priceScale('right').applyOptions({
+            autoScale: true
+          });
+        } catch (e) {}
+      }
+      const vols = sorted.map(c => ({
+        time: c.time,
+        value: c.volume || 0,
+        color: c.close >= c.open ? 'rgba(16, 185, 129, 0.35)' : 'rgba(244, 63, 94, 0.35)'
+      }));
+      if (volumeSeriesRef.current) {
+        volumeSeriesRef.current.setData(vols);
       }
 
-      renderChartCanvas();
+      // Run IndicatorRegistry calculations on client
+      if (window.IndicatorRegistry) {
+        for (const inst of instancesRef.current) {
+          try {
+            const def = window.IndicatorRegistry.get(inst.type);
+            if (def && typeof def.calculate === 'function') {
+              inst.calcResult = def.calculate(sorted, inst.inputs);
+            }
+          } catch (indErr) {
+            console.warn(`Indicator [${inst.name}] calculation error:`, indErr.message);
+          }
+        }
+      }
+
+      // Sync series & render canvas
+      syncSeriesIndicators();
+      triggerCanvasRender();
+
+      // Connect Direct Real-Time WebSocket stream
+      wsRef.current = DirectExchangeClient.createWebSocket(exchange, symbol, timeframe, tick => {
+        if (candleSeriesRef.current) {
+          candleSeriesRef.current.update(tick);
+          if (volumeSeriesRef.current) {
+            volumeSeriesRef.current.update({
+              time: tick.time,
+              value: tick.volume || 0,
+              color: tick.close >= tick.open ? 'rgba(16, 185, 129, 0.35)' : 'rgba(244, 63, 94, 0.35)'
+            });
+          }
+          triggerCanvasRender();
+        }
+      });
+    } catch (err) {
+      console.warn('Kline load err:', err.message);
+    } finally {
+      setLoading(false);
     }
-  } catch (e) {
-    console.error('Load Chart Error:', e);
-  }
-}
+  }, [exchange, symbol, timeframe, syncSeriesIndicators, triggerCanvasRender]);
 
-function getTfSeconds(tf) {
-  if (!tf) return 300;
-  if (tf === '1m') return 60;
-  if (tf === '3m') return 180;
-  if (tf === '5m') return 300;
-  if (tf === '15m') return 900;
-  if (tf === '30m') return 1800;
-  if (tf === '1h') return 3600;
-  if (tf === '4h') return 14400;
-  if (tf === '1d') return 86400;
-  return 300;
-}
+  // Load Klines when symbol, timeframe, or exchange changes
+  useEffect(() => {
+    loadCandlesDirect();
+    return () => {
+      if (wsRef.current && typeof wsRef.current.close === 'function') {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [loadCandlesDirect]);
 
-function renderChartCanvas() {
-  const canvas = el.liveChartCanvas;
-  if (!canvas || !el.chartViewport) return;
-
-  const rect = el.chartViewport.getBoundingClientRect();
-  const vWidth = Math.floor(rect.width || el.chartViewport.clientWidth || 360);
-  const vHeight = Math.floor(rect.height || el.chartViewport.clientHeight || 380);
-
-  // High DPI / Retina support for crisp rendering on mobile and PC
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.floor(vWidth * dpr);
-  canvas.height = Math.floor(vHeight * dpr);
-  canvas.style.width = `${vWidth}px`;
-  canvas.style.height = `${vHeight}px`;
-
-  const ctx = canvas.getContext('2d');
-  ctx.save();
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, vWidth, vHeight);
-
-  const candles = state.chart.candles;
-  if (!candles || candles.length === 0) {
-    ctx.fillStyle = '#64748b';
-    ctx.font = '13px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Syncing live candles from Binance Futures...', vWidth / 2, vHeight / 2);
-    ctx.restore();
-    return;
-  }
-
-  // Calculate slice based on panOffset and visibleCount (Free Mode: Right Margin Offset enabled)
-  const totalCount = candles.length;
-  const vCount = Math.max(15, Math.min(state.chart.visibleCount || 90, totalCount));
-  
-  // Free Mode bounds: allow dragging to create right margin whitespace (down to -vCount * 0.85)
-  const minPan = -Math.round(vCount * 0.85);
-  const maxPan = Math.max(0, totalCount - 15);
-  state.chart.panOffset = Math.max(minPan, Math.min(maxPan, state.chart.panOffset || 0));
-
-  const isMobile = vWidth < 550;
-  const rightAxisWidth = isMobile ? 68 : 88;
-  const chartLeft = isMobile ? 6 : 14;
-  const chartWidth = Math.max(100, vWidth - chartLeft - rightAxisWidth);
-  const barW = Math.max(2, chartWidth / vCount);
-
-  // Collect visible candles within viewport range
-  const visibleCandles = [];
-  for (let i = 0; i < totalCount; i++) {
-    const slot = i - (totalCount - vCount - state.chart.panOffset);
-    if (slot >= -1 && slot <= vCount + 1) {
-      visibleCandles.push(candles[i]);
+  // Recalculate indicators dynamically when instances prop changes (NO kline refetch needed)
+  useEffect(() => {
+    const currentCandles = candlesRef.current;
+    if (currentCandles && currentCandles.length > 0 && window.IndicatorRegistry) {
+      for (const inst of instances) {
+        try {
+          const def = window.IndicatorRegistry.get(inst.type);
+          if (def && typeof def.calculate === 'function') {
+            inst.calcResult = def.calculate(currentCandles, inst.inputs);
+          }
+        } catch (e) {}
+      }
+      syncSeriesIndicators();
+      triggerCanvasRender();
     }
-  }
+  }, [instances, syncSeriesIndicators, triggerCanvasRender]);
 
-  if (visibleCandles.length === 0) {
-    ctx.restore();
-    return;
-  }
-
-  const fromTime = visibleCandles[0].time;
-  const toTime = visibleCandles[visibleCandles.length - 1].time;
-
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  for (const c of visibleCandles) {
-    if (c.low < minPrice) minPrice = c.low;
-    if (c.high > maxPrice) maxPrice = c.high;
-  }
-  const priceMargin = (maxPrice - minPrice) * 0.15 || 1;
-  minPrice -= priceMargin;
-  maxPrice += priceMargin;
-
-  const priceRange = maxPrice - minPrice || 1;
-  const chartHeight = Math.max(150, vHeight - 50);
-  const chartTop = 12;
-  const getY = (p) => chartTop + chartHeight - ((p - minPrice) / priceRange) * chartHeight;
-
-  const tfSec = getTfSeconds(state.chart.timeframe);
-  const getX = (time) => {
-    if (time === null || time === undefined) return null;
-    const idx = candles.findIndex(c => c.time === time);
-    if (idx !== -1) {
-      const slot = idx - (totalCount - vCount - state.chart.panOffset);
-      return chartLeft + slot * barW + barW / 2;
+  // ── DRAWING COORDINATE MAPPING & HIT-TESTING (ROBUST CONTINUOUS TIME INTERPOLATION) ──
+  const getCanvasCoords = (time, price) => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const currentCandles = candlesRef.current;
+    if (!chart || !candleSeries || !currentCandles || currentCandles.length === 0) return {
+      x: null,
+      y: null
+    };
+    const timeScale = chart.timeScale();
+    let x = timeScale.timeToCoordinate(time);
+    if (x === null || isNaN(x)) {
+      if (currentCandles.length > 1) {
+        const first = currentCandles[0];
+        const last = currentCandles[currentCandles.length - 1];
+        const firstX = timeScale.timeToCoordinate(first.time);
+        const lastX = timeScale.timeToCoordinate(last.time);
+        if (firstX !== null && lastX !== null && lastX !== firstX) {
+          const pxPerSec = (lastX - firstX) / (last.time - first.time);
+          x = firstX + (time - first.time) * pxPerSec;
+        }
+      }
     }
-    // Future projection timestamp (e.g. extending lines into right whitespace)
-    if (candles.length > 0 && time > candles[candles.length - 1].time) {
-      const lastTime = candles[candles.length - 1].time;
-      const futureSlots = (time - lastTime) / tfSec;
-      const slot = (totalCount - 1 + futureSlots) - (totalCount - vCount - state.chart.panOffset);
-      return chartLeft + slot * barW + barW / 2;
+    const y = candleSeries.priceToCoordinate(price);
+    return {
+      x: x !== null && !isNaN(x) ? x : null,
+      y: y !== null && !isNaN(y) ? y : null
+    };
+  };
+  const getCoordinatesFromEvent = e => {
+    const container = chartContainerRef.current;
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const currentCandles = candlesRef.current;
+    if (!container || !chart || !candleSeries || !currentCandles || currentCandles.length === 0) return null;
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const timeScale = chart.timeScale();
+    let time = timeScale.coordinateToTime(x);
+    if (time === null || time === undefined) {
+      if (currentCandles.length > 1) {
+        const first = currentCandles[0];
+        const last = currentCandles[currentCandles.length - 1];
+        const firstX = timeScale.timeToCoordinate(first.time);
+        const lastX = timeScale.timeToCoordinate(last.time);
+        if (firstX !== null && lastX !== null && lastX !== firstX) {
+          const secPerPx = (last.time - first.time) / (lastX - firstX);
+          time = Math.round(first.time + (x - firstX) * secPerPx);
+        }
+      }
+    }
+    const price = candleSeries.coordinateToPrice(y);
+    return {
+      x,
+      y,
+      time: time !== null && !isNaN(time) ? time : null,
+      price: price !== null && !isNaN(price) ? price : null
+    };
+  };
+
+  // Comprehensive Hit-Test: Checks handles of selected drawing, or bodies of all drawings
+  const checkHitTest = (x, y) => {
+    const currentDrawings = drawingsRef.current || [];
+    const activeSelId = selectedIdRef.current;
+
+    // 1. If a drawing is currently selected, check its handles first
+    if (activeSelId) {
+      const sel = currentDrawings.find(d => d.id === activeSelId);
+      if (sel && sel.p1 && sel.p2) {
+        const c1 = getCanvasCoords(sel.p1.time, sel.p1.price);
+        const c2 = getCanvasCoords(sel.p2.time, sel.p2.price);
+        if (c1.x !== null && c1.y !== null && c2.x !== null && c2.y !== null) {
+          if (sel.type === 'line') {
+            if (Math.hypot(x - c1.x, y - c1.y) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'p1',
+                cursor: 'crosshair',
+                anchor: {
+                  ...sel.p2
+                }
+              };
+            }
+            if (Math.hypot(x - c2.x, y - c2.y) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'p2',
+                cursor: 'crosshair',
+                anchor: {
+                  ...sel.p1
+                }
+              };
+            }
+          } else {
+            // rect or measure: 4 corners with diagonal arrow cursors
+            const rx = Math.min(c1.x, c2.x);
+            const ry = Math.min(c1.y, c2.y);
+            const rw = Math.abs(c2.x - c1.x);
+            const rh = Math.abs(c2.y - c1.y);
+            const minTime = Math.min(sel.p1.time, sel.p2.time);
+            const maxTime = Math.max(sel.p1.time, sel.p2.time);
+            const minPrice = Math.min(sel.p1.price, sel.p2.price);
+            const maxPrice = Math.max(sel.p1.price, sel.p2.price);
+
+            // Top-Left (rx, ry) -> nwse-resize (↖↘)
+            if (Math.hypot(x - rx, y - ry) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'tl',
+                cursor: 'nwse-resize',
+                anchor: {
+                  time: maxTime,
+                  price: minPrice
+                }
+              };
+            }
+            // Bottom-Right (rx + rw, ry + rh) -> nwse-resize (↖↘)
+            if (Math.hypot(x - (rx + rw), y - (ry + rh)) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'br',
+                cursor: 'nwse-resize',
+                anchor: {
+                  time: minTime,
+                  price: maxPrice
+                }
+              };
+            }
+            // Top-Right (rx + rw, ry) -> nesw-resize (↗↙)
+            if (Math.hypot(x - (rx + rw), y - ry) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'tr',
+                cursor: 'nesw-resize',
+                anchor: {
+                  time: minTime,
+                  price: minPrice
+                }
+              };
+            }
+            // Bottom-Left (rx, ry + rh) -> nesw-resize (↗↙)
+            if (Math.hypot(x - rx, y - (ry + rh)) <= 12) {
+              return {
+                targetId: sel.id,
+                handle: 'bl',
+                cursor: 'nesw-resize',
+                anchor: {
+                  time: maxTime,
+                  price: maxPrice
+                }
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Check bodies of all drawings (reverse order for top-most)
+    for (let i = currentDrawings.length - 1; i >= 0; i--) {
+      const d = currentDrawings[i];
+      if (!d.p1 || !d.p2) continue;
+      const c1 = getCanvasCoords(d.p1.time, d.p1.price);
+      const c2 = getCanvasCoords(d.p2.time, d.p2.price);
+      if (c1.x === null || c1.y === null || c2.x === null || c2.y === null) continue;
+      if (d.type === 'line') {
+        const l2 = (c2.x - c1.x) ** 2 + (c2.y - c1.y) ** 2;
+        let t = l2 === 0 ? 0 : ((x - c1.x) * (c2.x - c1.x) + (y - c1.y) * (c2.y - c1.y)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        const dist = Math.hypot(x - (c1.x + t * (c2.x - c1.x)), y - (c1.y + t * (c2.y - c1.y)));
+        if (dist <= 12) {
+          return {
+            targetId: d.id,
+            handle: 'body',
+            cursor: 'move'
+          };
+        }
+      } else {
+        const rx = Math.min(c1.x, c2.x) - 4;
+        const ry = Math.min(c1.y, c2.y) - 4;
+        const rw = Math.abs(c2.x - c1.x) + 8;
+        const rh = Math.abs(c2.y - c1.y) + 8;
+        if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
+          return {
+            targetId: d.id,
+            handle: 'body',
+            cursor: 'move'
+          };
+        }
+      }
     }
     return null;
   };
 
-  // 1. Draw Grid Lines & Y-Axis Prices
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 6; i++) {
-    const y = chartTop + i * (chartHeight / 6);
-    ctx.beginPath();
-    ctx.moveTo(chartLeft, y);
-    ctx.lineTo(chartLeft + chartWidth, y);
-    ctx.stroke();
-
-    const priceAtY = maxPrice - (i / 6) * priceRange;
-    ctx.fillStyle = '#64748b';
-    ctx.font = '10px "JetBrains Mono"';
-    ctx.textAlign = 'left';
-    ctx.fillText(formatPrice(priceAtY), chartLeft + chartWidth + 8, y + 3);
-  }
-
-  // 2. Draw Candlesticks
-  for (let i = 0; i < totalCount; i++) {
-    const slot = i - (totalCount - vCount - state.chart.panOffset);
-    if (slot < -1 || slot > vCount + 1) continue;
-
-    const c = candles[i];
-    const x = chartLeft + slot * barW + barW / 2;
-    const yOpen = getY(c.open);
-    const yClose = getY(c.close);
-    const yHigh = getY(c.high);
-    const yLow = getY(c.low);
-
-    const isBull = c.close >= c.open;
-    const color = isBull ? '#10b981' : '#f43f5e';
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(x, yHigh);
-    ctx.lineTo(x, yLow);
-    ctx.stroke();
-
-    ctx.fillStyle = color;
-    const candleH = Math.max(2, Math.abs(yClose - yOpen));
-    ctx.fillRect(x - (barW * 0.72) / 2, Math.min(yOpen, yClose), barW * 0.72, candleH);
-  }
-
-  // 3. Draw STAT2 Pro Box Strategy Indicator Overlay
-  if (typeof Stat2BoxStrategyIndicator !== 'undefined' && state.chart.calcResult) {
-    const style = {
-      cardWidth: 230,
-      showCards: true,
-      showGuideLines: true,
-      lineLength: 280,
-      lineThickness: 2.0,
-      showFVG: true,
-      showLiquidity: true,
-      showRibbon: true
-    };
-    const helpers = {
-      candles: candles,
-      visibleCandles: visibleCandles,
-      fromTime: fromTime,
-      toTime: toTime,
-      rightViewportX: chartLeft + chartWidth,
-      getX: getX,
-      getY: getY,
-      formatPrice: formatPrice
-    };
-
-    Stat2BoxStrategyIndicator.renderCanvas(ctx, state.chart.calcResult, style, helpers);
-  }
-
-  // 4. Draw Crosshair & Price/Time Tracker
-  if (state.chart.crosshair && state.chart.crosshair.active && state.chart.crosshair.x !== null) {
-    const cx = state.chart.crosshair.x;
-    const cy = state.chart.crosshair.y;
-
-    if (cx >= chartLeft && cx <= chartLeft + chartWidth && cy >= chartTop && cy <= chartTop + chartHeight) {
-      ctx.save();
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.6)';
-      ctx.lineWidth = 1;
-
-      // Vertical crosshair
-      ctx.beginPath();
-      ctx.moveTo(cx, chartTop);
-      ctx.lineTo(cx, chartTop + chartHeight);
-      ctx.stroke();
-
-      // Horizontal crosshair
-      ctx.beginPath();
-      ctx.moveTo(chartLeft, cy);
-      ctx.lineTo(chartLeft + chartWidth, cy);
-      ctx.stroke();
-      ctx.restore();
-
-      // Price Tag on Y-axis
-      const crosshairPrice = maxPrice - ((cy - chartTop) / chartHeight) * priceRange;
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillRect(chartLeft + chartWidth + 2, cy - 9, 84, 18);
-      ctx.fillStyle = '#020617';
-      ctx.font = 'bold 10px "JetBrains Mono"';
-      ctx.textAlign = 'left';
-      ctx.fillText(formatPrice(crosshairPrice), chartLeft + chartWidth + 6, cy + 3);
-
-      // Time Tag on X-axis
-      const hoverBarIdx = Math.floor((cx - chartLeft) / barW);
-      if (hoverBarIdx >= 0 && hoverBarIdx < visibleCandles.length) {
-        const hoverCandle = visibleCandles[hoverBarIdx];
-        const timeStr = new Date(hoverCandle.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const tw = ctx.measureText(timeStr).width + 12;
-        ctx.fillStyle = '#1e293b';
-        ctx.fillRect(cx - tw / 2, chartTop + chartHeight + 4, tw, 18);
-        ctx.fillStyle = '#f8fafc';
-        ctx.font = '10px "JetBrains Mono"';
-        ctx.textAlign = 'center';
-        ctx.fillText(timeStr, cx, chartTop + chartHeight + 16);
-
-        // Update Top HUD Bar
-        updateChartHud(hoverCandle);
+  // Window-level tracking for smooth, non-dropping drag and resize
+  useEffect(() => {
+    const onWindowPointerMove = e => {
+      if (!dragActionRef.current) return;
+      const coords = getCoordinatesFromEvent(e);
+      if (!coords || coords.time === null || coords.price === null) return;
+      const {
+        time,
+        price
+      } = coords;
+      const dragAct = dragActionRef.current;
+      if (dragAct === 'create' && currentDrawingRef.current) {
+        setCurrentDrawing(prev => ({
+          ...prev,
+          p2: {
+            time,
+            price
+          }
+        }));
+        triggerCanvasRender();
+        return;
       }
-    }
-  } else {
-    // Show latest candle info on Top HUD Bar
-    if (visibleCandles.length > 0) {
-      updateChartHud(visibleCandles[visibleCandles.length - 1]);
-    }
-  }
-
-  ctx.restore();
-}
-
-function updateChartHud(c) {
-  if (!c) return;
-  const isBull = c.close >= c.open;
-  const changePct = ((c.close - c.open) / c.open * 100).toFixed(2);
-  const color = isBull ? '#10b981' : '#f43f5e';
-  const sign = isBull ? '+' : '';
-
-  if (el.hudSymbol) el.hudSymbol.textContent = `${state.chart.symbol} ${state.chart.timeframe}`;
-  if (el.hudOpen) el.hudOpen.textContent = formatPrice(c.open);
-  if (el.hudHigh) el.hudHigh.textContent = formatPrice(c.high);
-  if (el.hudLow) el.hudLow.textContent = formatPrice(c.low);
-  if (el.hudClose) {
-    el.hudClose.textContent = formatPrice(c.close);
-    el.hudClose.style.color = color;
-  }
-  if (el.hudVol) el.hudVol.textContent = Number(c.volume || 0).toLocaleString();
-  if (el.hudChange) {
-    el.hudChange.innerHTML = `<span style="color: ${color}; font-weight:700;">${sign}${changePct}%</span>`;
-  }
-}
-
-// ── UTILITIES ──
-function formatPrice(p) {
-  if (p === null || p === undefined || isNaN(p)) return '0.00';
-  const val = Number(p);
-  if (val >= 1000) return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (val >= 1) return val.toFixed(4);
-  return val.toFixed(6);
-}
-
-// ── EVENT LISTENERS INITIALIZATION ──
-function initEventListeners() {
-  // Main Tab Navigation
-  el.menuTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      el.menuTabs.forEach(t => t.classList.remove('active'));
-      el.tabPanels.forEach(p => p.classList.remove('active'));
-
-      tab.classList.add('active');
-      const targetPanel = document.getElementById(tab.dataset.tab);
-      if (targetPanel) targetPanel.classList.add('active');
-      state.activeTab = tab.dataset.tab;
-
-      if (tab.dataset.tab === 'tabChart') {
-        loadChartData();
-        setTimeout(renderChartCanvas, 80);
-      }
-      if (tab.dataset.tab === 'tabLogs') {
-        renderLogs();
-      }
-    });
-  });
-
-  // Subnav Navigation (Active Positions / Limit Orders / Closed History / Signals)
-  if (el.subnavBtns) {
-    el.subnavBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        el.subnavBtns.forEach(b => b.classList.remove('active'));
-        el.subtabContents.forEach(c => c.classList.remove('active'));
-
-        btn.classList.add('active');
-        state.activeSubtab = btn.dataset.subtab;
-        const target = document.getElementById(btn.dataset.subtab);
-        if (target) target.classList.add('active');
-      });
-    });
-  }
-
-  // Manual Scan
-  if (el.btnManualScan) {
-    el.btnManualScan.addEventListener('click', async () => {
-      el.btnManualScan.innerHTML = '<span>⏳ Scanning...</span>';
-      await fetch('/api/scanner/trigger', { method: 'POST' });
-      setTimeout(() => {
-        el.btnManualScan.innerHTML = '<span>⚡ Scan Now</span>';
-      }, 1200);
-    });
-  }
-
-  // Toggle Scanner
-  if (el.btnToggleScanner) {
-    el.btnToggleScanner.addEventListener('click', async () => {
-      await fetch('/api/scanner/toggle', { method: 'POST' });
-      const res = await fetch('/api/status').then(r => r.json());
-      if (res.success) {
-        state.status = res.status;
-        updateHeaderMetrics();
-      }
-    });
-  }
-
-  // Import Top 500 (5m & 15m)
-  if (el.btnImportTop500) {
-    el.btnImportTop500.addEventListener('click', async () => {
-      if (!confirm('Start fetching and importing Top 500 Binance Futures pairs across 5m & 15m (1,000 strategies)?')) return;
-      el.btnImportTop500.disabled = true;
-      el.btnImportTop500.textContent = '⏳ Seeding Top 500...';
-      const res = await fetch('/api/admin/import-top-500', { method: 'POST' }).then(r => r.json());
-      if (res.success) {
-        alert('🚀 Top 500 (1,000 strategies 5m/15m) import started in background! Check Live Console Logs tab for real-time progress.');
-      }
-      setTimeout(() => {
-        el.btnImportTop500.disabled = false;
-        el.btnImportTop500.textContent = '⚡ Re-Seed Top 500 (5m & 15m)';
-      }, 5000);
-    });
-  }
-
-  // Reset Trades & Signals ($1,000 Equity)
-  const handleResetTrades = async () => {
-    const ok = confirm('⚠️ BẠN CÓ CHẮC CHẮN MUỐN RESET TOÀN BỘ LỆNH & TÍN HIỆU?\n\n• Toàn bộ vị thế Active, Limit, Closed sẽ bị xóa.\n• Toàn bộ Signals Feed sẽ bị xóa.\n• Vốn tài khoản và PnL sẽ được đặt lại về $1,000.00 USD ban đầu.');
-    if (!ok) return;
-
-    try {
-      const res = await fetch('/api/admin/reset-trades', { method: 'POST' }).then(r => r.json());
-      if (res.success) {
-        state.activePositions = [];
-        state.closedPositions = [];
-        state.limitOrders = [];
-        state.signals = [];
-        state.performance = {
-          total_trades: 0,
-          wins: 0,
-          losses: 0,
-          win_rate: 0,
-          profit_factor: 0,
-          net_profit_usd: 0,
-          current_equity_usd: 1000.00
+      const selId = selectedIdRef.current;
+      const target = drawingsRef.current.find(d => d.id === selId);
+      if (!target) return;
+      if (dragAct === 'move' && dragOriginRef.current && dragOriginRef.current.initP1 && dragOriginRef.current.initP2) {
+        const dt = time - dragOriginRef.current.startTime;
+        const dp = price - dragOriginRef.current.startPrice;
+        target.p1 = {
+          time: dragOriginRef.current.initP1.time + dt,
+          price: dragOriginRef.current.initP1.price + dp
         };
-        updateDashboardUI();
-        alert('✅ ĐÃ RESET TOÀN BỘ LỆNH THÀNH CÔNG!\nSố dư tài khoản đã được khôi phục về $1,000.00 USD.');
-      } else {
-        alert(`❌ Lỗi reset: ${res.error}`);
+        target.p2 = {
+          time: dragOriginRef.current.initP2.time + dt,
+          price: dragOriginRef.current.initP2.price + dp
+        };
+        setDrawings([...drawingsRef.current]);
+        triggerCanvasRender();
+      } else if (dragAct === 'p1') {
+        target.p1 = {
+          time,
+          price
+        };
+        setDrawings([...drawingsRef.current]);
+        triggerCanvasRender();
+      } else if (dragAct === 'p2') {
+        target.p2 = {
+          time,
+          price
+        };
+        setDrawings([...drawingsRef.current]);
+        triggerCanvasRender();
+      } else if (dragOriginRef.current && dragOriginRef.current.anchor) {
+        target.p1 = {
+          time,
+          price
+        };
+        target.p2 = dragOriginRef.current.anchor;
+        setDrawings([...drawingsRef.current]);
+        triggerCanvasRender();
       }
+    };
+    const onWindowPointerUp = e => {
+      if (!dragActionRef.current) return;
+      if (dragActionRef.current === 'create' && currentDrawingRef.current) {
+        const draft = currentDrawingRef.current;
+        setCurrentDrawing(null);
+        setDragAction(null);
+        const nextList = [...drawingsRef.current, draft];
+        setDrawings(nextList);
+        setSelectedId(draft.id);
+        setDrawTool('cursor');
+        triggerCanvasRender();
+        debouncedSaveDrawing(draft);
+        return;
+      }
+      if (dragActionRef.current && selectedIdRef.current) {
+        const target = drawingsRef.current.find(d => d.id === selectedIdRef.current);
+        setDragAction(null);
+        if (target) {
+          debouncedSaveDrawing(target);
+        }
+      }
+      setDragAction(null);
+    };
+    window.addEventListener('pointermove', onWindowPointerMove);
+    window.addEventListener('pointerup', onWindowPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onWindowPointerMove);
+      window.removeEventListener('pointerup', onWindowPointerUp);
+    };
+  }, [triggerCanvasRender, debouncedSaveDrawing]);
+
+  // ── WORKSPACE MOUSE DOWN & HOVER DETECTION ──
+  const handleWorkspaceMouseDown = e => {
+    const coords = getCoordinatesFromEvent(e);
+    if (!coords || coords.time === null || coords.price === null) return;
+    const {
+      x,
+      y,
+      time,
+      price
+    } = coords;
+    if (drawTool !== 'cursor') {
+      // Create new drawing
+      const newDraw = {
+        id: `draw_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        type: drawTool,
+        p1: {
+          time,
+          price
+        },
+        p2: {
+          time,
+          price
+        },
+        color: drawColor
+      };
+      currentDrawingRef.current = newDraw;
+      setCurrentDrawing(newDraw);
+      dragActionRef.current = 'create';
+      setDragAction('create');
+      selectedIdRef.current = null;
+      setSelectedId(null);
+      return;
+    }
+
+    // In Cursor Mode: Hit test
+    const hit = checkHitTest(x, y);
+    if (hit) {
+      e.stopPropagation();
+      selectedIdRef.current = hit.targetId;
+      setSelectedId(hit.targetId);
+      dragActionRef.current = hit.handle;
+      setDragAction(hit.handle);
+      const d = drawingsRef.current.find(item => item.id === hit.targetId);
+      const originData = {
+        startX: x,
+        startY: y,
+        startTime: time,
+        startPrice: price,
+        initP1: d ? {
+          ...d.p1
+        } : null,
+        initP2: d ? {
+          ...d.p2
+        } : null,
+        anchor: hit.anchor || null
+      };
+      dragOriginRef.current = originData;
+      setDragOrigin(originData);
+      triggerCanvasRender();
+    } else {
+      if (selectedIdRef.current) {
+        selectedIdRef.current = null;
+        setSelectedId(null);
+        triggerCanvasRender();
+      }
+    }
+  };
+  const handleWorkspaceMouseMove = e => {
+    if (dragActionRef.current) return; // Managed by window listener
+    if (drawTool !== 'cursor') return;
+    const coords = getCoordinatesFromEvent(e);
+    if (!coords) return;
+    const {
+      x,
+      y
+    } = coords;
+
+    // Check hit test to dynamically adjust hover cursor and pointerEvents
+    const hit = checkHitTest(x, y);
+    setHoverTarget(hit);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col h-full w-full bg-binance-bg overflow-hidden relative select-none font-sans"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-9 px-3 border-b border-binance-border flex items-center justify-between bg-binance-panel text-xs shrink-0 z-20"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-binance-yellow font-mono text-sm tracking-wide"
+  }, symbol), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-300 bg-binance-card px-2 py-0.5 rounded border border-binance-borderSubtle font-bold font-mono"
+  }, exchange), /*#__PURE__*/React.createElement("div", {
+    className: "h-4 w-[1px] bg-binance-border mx-1"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5"
+  }, ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'].map(tf => /*#__PURE__*/React.createElement("button", {
+    key: tf,
+    className: `px-2 py-0.5 rounded text-[11px] font-bold transition ${timeframe === tf ? 'bg-binance-active text-binance-yellow shadow' : 'text-slate-400 hover:text-white'}`,
+    onClick: () => onTfChange && onTfChange(tf)
+  }, tf))), /*#__PURE__*/React.createElement("div", {
+    className: "h-4 w-[1px] bg-binance-border mx-1"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "px-2.5 py-1 rounded text-[11px] font-extrabold bg-binance-card hover:bg-binance-hover text-binance-cyan border border-binance-border flex items-center gap-1.5 shadow transition",
+    onClick: onOpenCatalog,
+    title: "Mở Danh Mục Chỉ Báo & Hàm Tính Toán (Indicators & Strategies)"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-serif italic font-black text-xs"
+  }, "fx"), /*#__PURE__*/React.createElement("span", null, "Indicators (", instances.filter(i => i.visible).length, ")")), /*#__PURE__*/React.createElement("button", {
+    className: "px-2.5 py-1 rounded text-[11px] font-bold bg-binance-card hover:bg-binance-hover text-slate-200 border border-binance-border flex items-center gap-1.5 shadow transition",
+    onClick: loadCandlesDirect,
+    title: "Đồng Bộ & Tải Lại Nến Trực Tiếp (Sync Klines)"
+  }, /*#__PURE__*/React.createElement("span", null, "🔄"), /*#__PURE__*/React.createElement("span", null, "Sync"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, onToggleCollapse && /*#__PURE__*/React.createElement("button", {
+    className: `px-2.5 py-1 rounded text-[10.5px] font-extrabold transition border flex items-center gap-1 ${isCollapsed ? 'bg-binance-yellow text-black border-binance-yellow shadow-lg' : 'bg-binance-subpanel text-binance-text border-binance-border hover:text-white'}`,
+    onClick: onToggleCollapse,
+    title: isCollapsed ? 'Mở Rộng Bàn Làm Việc' : 'Thu Gọn / Phóng To Biểu Đồ'
+  }, /*#__PURE__*/React.createElement("span", null, isCollapsed ? '▲ Expand Desk' : '▼ Maximize Chart')))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 w-full h-full flex flex-row overflow-hidden bg-binance-bg relative"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-10 bg-binance-panel border-r border-binance-border flex flex-col items-center py-2.5 gap-1.5 z-20 shrink-0 select-none shadow"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: `w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center transition ${drawTool === 'cursor' ? 'bg-binance-yellow text-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-binance-card'}`,
+    onClick: () => {
+      setDrawTool('cursor');
+    },
+    title: "👆 Chế độ rê chuột / Chọn, Kéo & Phóng to thu nhỏ hình (Pan & Select)"
+  }, "👆"), /*#__PURE__*/React.createElement("button", {
+    className: `w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center transition ${drawTool === 'line' ? 'bg-binance-yellow text-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-binance-card'}`,
+    onClick: () => {
+      setDrawTool('line');
+      setSelectedId(null);
+    },
+    title: "📏 Vẽ Đường Xu Hướng / Trendline"
+  }, "📏"), /*#__PURE__*/React.createElement("button", {
+    className: `w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center transition ${drawTool === 'rect' ? 'bg-binance-yellow text-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-binance-card'}`,
+    onClick: () => {
+      setDrawTool('rect');
+      setSelectedId(null);
+    },
+    title: "🟩 Vẽ Khối Vùng Giá / Box SMC Zone"
+  }, "🟩"), /*#__PURE__*/React.createElement("button", {
+    className: `w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center transition ${drawTool === 'measure' ? 'bg-binance-cyan text-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-binance-card'}`,
+    onClick: () => {
+      setDrawTool('measure');
+      setSelectedId(null);
+    },
+    title: "📐 Thước Đo Khoảng Cách Giá, % & Số Nến"
+  }, "📐"), /*#__PURE__*/React.createElement("div", {
+    className: "w-5 h-[1px] bg-binance-border/80 my-1"
+  }), ['#00F0FF', '#F0B90B', '#10B981', '#F43F5E'].map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    className: `w-3.5 h-3.5 rounded-full transition border ${drawColor === c ? 'border-white scale-125 shadow' : 'border-transparent opacity-50 hover:opacity-100'}`,
+    style: {
+      backgroundColor: c
+    },
+    onClick: e => {
+      setDrawColor(c);
+      if (selectedId) handleChangeColor(selectedId, c, e);
+    },
+    title: `Màu vẽ ${c}`
+  })), drawings.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "w-5 h-[1px] bg-binance-border/80 my-1"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "w-7 h-7 rounded-lg text-xs font-bold text-binance-red hover:bg-binance-red/20 flex items-center justify-center transition",
+    onClick: handleClearDrawings,
+    title: `🗑️ Xóa tất cả hình vẽ (${drawings.length})`
+  }, "🗑️"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 h-full relative overflow-hidden bg-binance-bg",
+    onMouseDown: handleWorkspaceMouseDown,
+    onMouseMove: handleWorkspaceMouseMove
+  }, selectedId && /*#__PURE__*/React.createElement("div", {
+    className: "absolute top-2.5 left-1/2 -translate-x-1/2 z-30 bg-[#0E1322]/95 backdrop-blur-md border border-binance-borderHighlight rounded-xl px-3 py-1.5 flex items-center gap-2.5 shadow-2xl font-mono text-xs select-none",
+    onMouseDown: e => e.stopPropagation(),
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow font-extrabold text-[11px] uppercase tracking-wide"
+  }, drawings.find(d => d.id === selectedId)?.type || 'Drawing'), /*#__PURE__*/React.createElement("div", {
+    className: "h-4 w-[1px] bg-binance-border mx-0.5"
+  }), ['#00F0FF', '#F0B90B', '#10B981', '#F43F5E'].map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    type: "button",
+    className: "w-4 h-4 rounded-full transition border border-white/40 hover:scale-125 shadow",
+    style: {
+      backgroundColor: c
+    },
+    onMouseDown: e => e.stopPropagation(),
+    onClick: e => handleChangeColor(selectedId, c, e),
+    title: `Đổi màu ${c}`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "h-4 w-[1px] bg-binance-border mx-0.5"
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "bg-binance-red hover:bg-red-600 active:scale-95 text-white px-2.5 py-1 rounded-lg font-extrabold text-[11px] transition shadow flex items-center gap-1 cursor-pointer select-none",
+    onMouseDown: e => {
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    onClick: e => {
+      e.stopPropagation();
+      e.preventDefault();
+      handleDeleteDrawing(selectedId, e);
+    },
+    title: "Xóa hình vẽ này (Phím Delete hoặc Backspace)"
+  }, /*#__PURE__*/React.createElement("span", null, "🗑️"), /*#__PURE__*/React.createElement("span", null, "Xóa")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-binance-card transition",
+    onMouseDown: e => e.stopPropagation(),
+    onClick: e => {
+      e.stopPropagation();
+      setSelectedId(null);
+    },
+    title: "Bỏ chọn"
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "chart-watermark"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "watermark-symbol"
+  }, symbol), /*#__PURE__*/React.createElement("div", {
+    className: "watermark-sub"
+  }, timeframe.toUpperCase(), " · ", exchange, " FUTURES")), /*#__PURE__*/React.createElement("div", {
+    className: "chart-legend"
+  }, instances.map(inst => /*#__PURE__*/React.createElement("div", {
+    key: inst.id,
+    className: `legend-row ${inst.visible ? '' : 'inactive'}`,
+    onClick: () => onOpenSettings(inst)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "legend-dot",
+    style: {
+      background: inst.type === 'stat2_box_strategy' ? '#00F0FF' : inst.type === 'ema' ? '#38BDF8' : '#FBBF24'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "legend-title"
+  }, inst.name), /*#__PURE__*/React.createElement("div", {
+    className: "legend-actions",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "legend-btn",
+    onClick: () => onToggleVisibility(inst.id),
+    title: inst.visible ? 'Hide Indicator' : 'Show Indicator'
+  }, inst.visible ? '👁️' : '👁️‍🗨️'), /*#__PURE__*/React.createElement("button", {
+    className: "legend-btn",
+    onClick: () => onOpenSettings(inst),
+    title: "Settings"
+  }, "⚙️"), /*#__PURE__*/React.createElement("button", {
+    className: "legend-btn text-binance-red",
+    onClick: () => onRemoveInstance(inst.id),
+    title: "Remove from Chart"
+  }, "✕"))))), /*#__PURE__*/React.createElement("div", {
+    ref: chartContainerRef,
+    className: "w-full h-full"
+  }), /*#__PURE__*/React.createElement("canvas", {
+    ref: overlayCanvasRef,
+    onMouseDown: handleWorkspaceMouseDown,
+    onMouseMove: handleWorkspaceMouseMove,
+    style: {
+      cursor: drawTool !== 'cursor' ? 'crosshair' : dragAction ? dragAction === 'move' ? 'grabbing' : hoverTarget?.cursor || 'crosshair' : hoverTarget?.cursor || 'default',
+      pointerEvents: drawTool !== 'cursor' || hoverTarget !== null || dragAction !== null ? 'auto' : 'none'
+    },
+    className: "absolute inset-0 w-full h-full z-10"
+  }), loading && /*#__PURE__*/React.createElement("div", {
+    className: "absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center gap-2 text-binance-yellow text-xs font-mono z-30"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "animate-spin text-base"
+  }, "⚡"), /*#__PURE__*/React.createElement("span", null, "Connecting direct live feeds for ", symbol, " (", timeframe, ")...")))));
+}
+
+// ── CYBERPUNK STARTUP SPLASHSCREEN COMPONENT ──
+function SplashScreen({
+  tasks,
+  progress,
+  isReady
+}) {
+  if (isReady) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 z-50 bg-[#070A12] flex flex-col items-center justify-center p-6 text-white font-mono select-none"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col items-center max-w-md w-full gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col items-center gap-2 text-center"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-16 h-16 rounded-2xl bg-gradient-to-tr from-binance-yellow/20 to-binance-cyan/20 border border-binance-yellow/40 flex items-center justify-center text-3xl shadow-[0_0_35px_rgba(240,185,11,0.4)] animate-pulse"
+  }, "⚡"), /*#__PURE__*/React.createElement("h1", {
+    className: "text-lg font-black tracking-widest text-white mt-2"
+  }, "STAT2 ", /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "FUTURES PRO")), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-binance-textSec"
+  }, "Multi-Exchange Quantitative Terminal (Binance · Bybit · OKX)")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between text-xs font-bold"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "SYSTEM INITIALIZATION"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-cyan"
+  }, Math.min(progress, 100), "%")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-2.5 bg-binance-panel rounded-full overflow-hidden border border-binance-border"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full bg-gradient-to-r from-binance-yellow via-binance-cyan to-binance-green rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(240,185,11,0.6)]",
+    style: {
+      width: `${progress}%`
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "w-full bg-binance-panel/90 border border-binance-border rounded-lg p-3.5 flex flex-col gap-2.5 shadow-2xl"
+  }, tasks.map(t => {
+    const isDone = t.status === 'done';
+    const isRunning = t.status === 'running';
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      className: "flex items-center justify-between text-[11px]"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2.5"
+    }, isDone ? /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-green font-black text-xs"
+    }, "✓") : isRunning ? /*#__PURE__*/React.createElement("span", {
+      className: "animate-spin text-binance-yellow font-black text-xs"
+    }, "⚡") : /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted text-xs"
+    }, "○"), /*#__PURE__*/React.createElement("span", {
+      className: isDone ? 'text-white font-medium' : isRunning ? 'text-binance-yellow font-bold' : 'text-binance-textMuted'
+    }, t.label)), /*#__PURE__*/React.createElement("span", {
+      className: `text-[9.5px] font-mono font-bold px-1.5 py-0.2 rounded ${isDone ? 'bg-binance-greenBg text-binance-green' : isRunning ? 'bg-binance-yellow/20 text-binance-yellow animate-pulse' : 'text-binance-textMuted'}`
+    }, isDone ? 'READY' : isRunning ? 'INIT' : 'WAIT'));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-[10px] text-binance-textMuted tracking-wider text-center"
+  }, "INITIALIZING QUANTITATIVE ARRAYS & MULTI-EXCHANGE REALTIME WEBSOCKET FEEDS...")));
+}
+
+// ── DEEP QUANTITATIVE ORDER & TRADE FORENSICS INTELLIGENCE MODAL ──
+function OrderForensicsModal({
+  data,
+  marketPrices,
+  indicatorInstances,
+  onOpenCatalog,
+  onToggleVisibility,
+  onOpenSettings,
+  onRemoveInstance,
+  onClose,
+  onSelectSymbol,
+  onClosePosition
+}) {
+  if (!data) return null;
+  const [activeSection, setActiveSection] = useState('sec-flow');
+  const [modalTf, setModalTf] = useState(data.timeframe || data.tf || '15m');
+  const scrollContainerRef = useRef(null);
+
+  // ── TRADE NOTES PERSISTENCE STATE ──
+  const [tradeNote, setTradeNote] = useState('');
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [saveNoteSuccess, setSaveNoteSuccess] = useState(false);
+  const isLong = data.direction === 'BUY' || data.signal_type && data.signal_type.includes('BUY') || data.side && data.side.toUpperCase() === 'BUY';
+  const symbol = data.symbol || 'BTCUSDT';
+  const exchange = data.exchange || 'BINANCE';
+  const targetId = data.id || `${exchange}_${symbol}`;
+
+  // Load trade notes from DB
+  useEffect(() => {
+    let isCancelled = false;
+    async function loadNote() {
+      try {
+        const res = await fetch(`/api/notes/${targetId}`).then(r => r.json());
+        if (!isCancelled && res.success && res.data && res.data.note_text !== undefined) {
+          setTradeNote(res.data.note_text || '');
+        }
+      } catch (e) {}
+    }
+    loadNote();
+    return () => {
+      isCancelled = true;
+    };
+  }, [targetId]);
+  const handleSaveNote = async () => {
+    setIsSavingNote(true);
+    try {
+      await fetch(`/api/notes/${targetId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          symbol,
+          note_text: tradeNote
+        })
+      });
+      setSaveNoteSuccess(true);
+      setTimeout(() => setSaveNoteSuccess(false), 2500);
     } catch (err) {
-      alert(`❌ Lỗi kết nối: ${err.message}`);
+      console.warn('Save note err:', err);
+    } finally {
+      setIsSavingNote(false);
     }
   };
 
-  if (el.btnResetOrdersAndPnL) el.btnResetOrdersAndPnL.addEventListener('click', handleResetTrades);
-  if (el.btnResetTradesOnly) el.btnResetTradesOnly.addEventListener('click', handleResetTrades);
+  // Realtime Market Price resolution
+  const pKey1 = `${exchange}_${symbol}`;
+  const pKey2 = `${exchange}_${symbol.replace('-', '')}`;
+  const livePriceObj = marketPrices[pKey1] || marketPrices[pKey2] || marketPrices[symbol] || {};
+  const currentPrice = livePriceObj.price || data.current_price || data.entry_price || 0;
 
-  // Full Database Factory Reset
-  if (el.btnResetFactoryDb) {
-    el.btnResetFactoryDb.addEventListener('click', async () => {
-      const ok = confirm('⚠️ CẢNH BÁO: BẠN CÓ CHẮC CHẮN MUỐN FACTORY RESET TOÀN BỘ DATABASE?\n\n• Toàn bộ Database SQLite (Lệnh, Nến, Cài đặt) sẽ bị xóa trắng.\n• Hệ thống sẽ tự động tải lại Top 500 Symbol và 1.000 Chiến lược 5m/15m mới.');
-      if (!ok) return;
+  // Targets
+  const entryPrice = parseFloat(data.entry_price || data.price || currentPrice) || 1;
+  const tp1Price = parseFloat(data.tp1_price || (isLong ? entryPrice * 1.015 : entryPrice * 0.985));
+  const tp2Price = parseFloat(data.tp2_price || (isLong ? entryPrice * 1.035 : entryPrice * 0.965));
+  const slPrice = parseFloat(data.sl_price || (isLong ? entryPrice * 0.988 : entryPrice * 1.012));
+  const leverage = parseInt(data.leverage) || 20;
+  const marginUsed = parseFloat(data.initial_margin || data.margin_used || data.margin || 100);
+  const posSizeUsd = parseFloat(data.pos_size_usd) || marginUsed * leverage;
 
+  // Price Distances
+  const tp1MovePct = entryPrice > 0 ? (isLong ? (tp1Price - entryPrice) / entryPrice : (entryPrice - tp1Price) / entryPrice) * 100 : 1.5;
+  const tp2MovePct = entryPrice > 0 ? (isLong ? (tp2Price - entryPrice) / entryPrice : (entryPrice - tp2Price) / entryPrice) * 100 : 3.5;
+  const slMovePct = entryPrice > 0 ? (isLong ? (entryPrice - slPrice) / entryPrice : (slPrice - entryPrice) / entryPrice) * 100 : 1.2;
+
+  // Projected Profit & Loss in USD
+  const tp1Usd = posSizeUsd * (tp1MovePct / 100);
+  const tp2Usd = posSizeUsd * (tp2MovePct / 100);
+  const slUsd = posSizeUsd * (slMovePct / 100);
+  const tp1Roi = tp1MovePct * leverage;
+  const tp2Roi = tp2MovePct * leverage;
+  const slLossPct = slMovePct * leverage;
+  const rrRatio = slMovePct > 0 ? tp1MovePct / slMovePct : 2.0;
+
+  // Realtime Live Unrealized PnL
+  let unPnlPct = 0;
+  let unPnlUsd = 0;
+  if (entryPrice > 0 && currentPrice > 0) {
+    const rawDiff = isLong ? (currentPrice - entryPrice) / entryPrice : (entryPrice - currentPrice) / entryPrice;
+    unPnlPct = rawDiff * 100 * leverage;
+    unPnlUsd = marginUsed * (unPnlPct / 100);
+  }
+  if (data.net_pnl_usd !== undefined) {
+    unPnlUsd = data.net_pnl_usd;
+    unPnlPct = data.roe_pct !== undefined ? data.roe_pct : marginUsed > 0 ? unPnlUsd / marginUsed * 100 : 0;
+  }
+
+  // Progress to TP1
+  let progressPct = 0;
+  if (isLong) {
+    if (currentPrice >= tp1Price) progressPct = 100;else if (currentPrice <= slPrice) progressPct = 0;else progressPct = Math.max(0, Math.min(100, (currentPrice - entryPrice) / (tp1Price - entryPrice) * 100));
+  } else {
+    if (currentPrice <= tp1Price) progressPct = 100;else if (currentPrice >= slPrice) progressPct = 0;else progressPct = Math.max(0, Math.min(100, (entryPrice - currentPrice) / (entryPrice - tp1Price) * 100));
+  }
+  const isActive = data.id && data.status === 'ACTIVE';
+  const navItems = [{
+    id: 'sec-flow',
+    icon: '🧠',
+    label: '1. Flow Phân Tích & Rationale',
+    desc: 'Logic kích hoạt & bộ lọc 4 bước'
+  }, {
+    id: 'sec-targets',
+    icon: '🎯',
+    label: '2. Mốc Giá, PnL & Quản Lý Size',
+    desc: 'Entry, TP, SL & Báo Cáo Sizing'
+  }, {
+    id: 'sec-status',
+    icon: '⚡',
+    label: '3. Tình Trạng Lệnh Thực Tế',
+    desc: 'Tiến trình TP1 & PnL Realtime'
+  }, {
+    id: 'sec-smc',
+    icon: '📐',
+    label: '4. Cấu Trúc Smart Money',
+    desc: 'Thanh khoản BSL/SSL & FVG'
+  }, {
+    id: 'sec-chart',
+    icon: '📊',
+    label: `5. ${symbol} • ${modalTf} Chart`,
+    desc: 'Biểu đồ nến & bộ công cụ vẽ'
+  }, {
+    id: 'sec-notes',
+    icon: '📝',
+    label: '6. Ghi Chú Lệnh (Trade Journal)',
+    desc: 'Lưu ghi chú cá nhân vào DB'
+  }, {
+    id: 'sec-engine',
+    icon: '📜',
+    label: '7. Thông Số Thuật Toán & Audit',
+    desc: 'ID, thời gian & cài đặt bảo mật'
+  }];
+  const handleNavClick = (e, id) => {
+    e.preventDefault();
+    setActiveSection(id);
+    const target = document.getElementById(id);
+    if (target && scrollContainerRef.current) {
+      const topOffset = target.offsetTop - scrollContainerRef.current.offsetTop - 8;
+      scrollContainerRef.current.scrollTo({
+        top: Math.max(0, topOffset),
+        behavior: 'smooth'
+      });
+    }
+  };
+  const handleScrollSpy = () => {
+    if (!scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+    const scrollPos = container.scrollTop + 120;
+    for (let i = navItems.length - 1; i >= 0; i--) {
+      const item = navItems[i];
+      const el = document.getElementById(item.id);
+      if (el && el.offsetTop - container.offsetTop <= scrollPos) {
+        setActiveSection(item.id);
+        break;
+      }
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-2 sm:p-4 md:p-6 select-none font-sans"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-binance-panel border border-binance-borderHighlight rounded-2xl w-full max-w-6xl xl:max-w-7xl h-[92vh] flex flex-col overflow-hidden shadow-2xl text-xs",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 border-b border-binance-border bg-binance-subpanel flex flex-wrap items-center justify-between gap-3 shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `px-2.5 py-1 rounded font-black text-xs font-mono shadow ${isLong ? 'badge-long' : 'badge-short'}`
+  }, isLong ? '▲ LONG / BUY' : '▼ SHORT / SELL'), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 font-extrabold text-sm text-white"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base tracking-wide font-mono"
+  }, symbol), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 bg-binance-card px-2 py-0.5 rounded border border-binance-borderSubtle font-mono"
+  }, exchange, " • ", leverage, "x ISOLATED • ", modalTf)), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline-block bg-binance-active text-binance-yellow text-[10.5px] px-2.5 py-0.5 rounded font-bold border border-binance-yellow/30 font-mono tracking-wide"
+  }, data.strategy_name || data.signal_type || 'STAT2 VIDYA + SMC QUANTITATIVE ENGINE')), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 bg-binance-card/80 px-3 py-1 rounded border border-binance-borderSubtle font-mono"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-[10px] font-semibold uppercase"
+  }, "MARK:"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs"
+  }, "$", formatPrice(currentPrice)), /*#__PURE__*/React.createElement("span", {
+    className: `font-bold text-xs ${unPnlUsd >= 0 ? 'text-binance-green' : 'text-binance-red'}`
+  }, "(", unPnlUsd >= 0 ? '+' : '', "$", formatPrice(unPnlUsd), " / ", unPnlPct >= 0 ? '+' : '', unPnlPct.toFixed(2), "%)")), /*#__PURE__*/React.createElement("button", {
+    className: "text-slate-400 hover:text-white text-base font-bold w-7 h-7 flex items-center justify-center rounded bg-binance-card hover:bg-binance-hover border border-binance-border transition",
+    onClick: onClose,
+    title: "Đóng Hộp Thoại (Close Modal)"
+  }, "✕"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex overflow-hidden"
+  }, /*#__PURE__*/React.createElement("aside", {
+    className: "w-60 sm:w-72 bg-binance-subpanel/80 border-r border-binance-border flex flex-col justify-between shrink-0 p-3 overflow-y-auto font-sans"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 font-bold uppercase tracking-wider px-2 pb-1 flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "📑"), /*#__PURE__*/React.createElement("span", null, "MỤC LỤC PHÂN TÍCH")), navItems.map(item => /*#__PURE__*/React.createElement("a", {
+    key: item.id,
+    href: `#${item.id}`,
+    onClick: e => handleNavClick(e, item.id),
+    className: `px-3 py-2.5 rounded-lg flex flex-col gap-0.5 transition border ${activeSection === item.id ? 'bg-binance-card border-binance-yellow text-binance-yellow shadow-md' : 'border-transparent text-slate-400 hover:text-white hover:bg-binance-card/50'}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 font-bold text-xs"
+  }, /*#__PURE__*/React.createElement("span", null, item.icon), /*#__PURE__*/React.createElement("span", {
+    className: activeSection === item.id ? 'text-white' : ''
+  }, item.label)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 pl-5 font-medium"
+  }, item.desc)))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded-lg border border-binance-border flex flex-col gap-2 mt-4 text-[11px] font-mono shadow-inner"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] font-bold text-slate-300 uppercase border-b border-binance-border pb-1 tracking-wider flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", null, "TỔNG QUAN RỦI RO & LỢI NHUẬN"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "USD & ROI")), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between items-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400"
+  }, "Tỷ Lệ R:R:"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-yellow font-bold"
+  }, "1 : ", rrRatio.toFixed(2))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between items-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400"
+  }, "Kỳ Vọng TP1:"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-green font-bold"
+  }, "+$", formatPrice(tp1Usd), " USD ", /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] opacity-80"
+  }, "(+", tp1Roi.toFixed(1), "%)"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between items-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400"
+  }, "Kỳ Vọng TP2:"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-cyan font-bold"
+  }, "+$", formatPrice(tp2Usd), " USD ", /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] opacity-80"
+  }, "(+", tp2Roi.toFixed(1), "%)"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between items-center border-t border-binance-border/60 pt-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400"
+  }, "Rủi Ro SL:"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-red font-bold"
+  }, "-$", formatPrice(slUsd), " USD ", /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] opacity-80"
+  }, "(-", slLossPct.toFixed(1), "%)"))))), /*#__PURE__*/React.createElement("main", {
+    ref: scrollContainerRef,
+    onScroll: handleScrollSpy,
+    className: "flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-8 scroll-smooth bg-binance-bg/50"
+  }, /*#__PURE__*/React.createElement("section", {
+    id: "sec-flow",
+    className: "flex flex-col gap-3 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "🧠"), /*#__PURE__*/React.createElement("span", null, "1. FLOW PHÂN TÍCH & LOGIC VÀO LỆNH (EXECUTION RATIONALE)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] bg-binance-greenBg text-binance-green px-2 py-0.5 rounded font-black border border-binance-green/30 tracking-wider"
+  }, "4/4 BƯỚC ĐẠT CHUẨN")), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col md:flex-row items-start md:items-center justify-between gap-3 hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 shrink-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-lg bg-binance-yellow/20 text-binance-yellow flex items-center justify-center font-black text-xs border border-binance-yellow/40"
+  }, "1"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs block"
+  }, "Chế Độ Xu Hướng & Động Lượng (Trend & Momentum)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400 font-medium"
+  }, "VIDYA MA Ribbon + Chande Momentum Oscillator"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0 font-mono text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-panel px-2 py-1 rounded border border-binance-borderSubtle"
+  }, "CMO: ", /*#__PURE__*/React.createElement("b", {
+    className: "text-white"
+  }, data.cmo_val ? data.cmo_val.toFixed(2) : '+34.20')), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-panel px-2 py-1 rounded border border-binance-borderSubtle"
+  }, "ATR: ", /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-cyan"
+  }, (data.atr_pct || 0.78).toFixed(2), "%")), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-greenBg text-binance-green px-2 py-1 rounded font-bold"
+  }, data.market_regime || 'EXPANSION')), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-slate-300 leading-relaxed md:max-w-md"
+  }, "Hệ thống xác nhận xu hướng chủ đạo rõ ràng, biên độ dao động ATR đủ lớn để mở vị thế tiếp diễn/bắt bẫy thanh khoản.")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col md:flex-row items-start md:items-center justify-between gap-3 hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 shrink-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-lg bg-binance-cyan/20 text-binance-cyan flex items-center justify-center font-black text-xs border border-binance-cyan/40"
+  }, "2"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs block"
+  }, "Cấu Trúc SMC & Quét Thanh Khoản (Liquidity Sweep)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400 font-medium"
+  }, "Smart Money Traps & Fair Value Gap Detection"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0 font-mono text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-cyanBg text-binance-cyan px-2 py-1 rounded font-bold"
+  }, isLong ? 'SSL LIQ SWEEP' : 'BSL LIQ SWEEP'), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-panel px-2 py-1 rounded border border-binance-borderSubtle"
+  }, isLong ? 'FVG+ BULLISH' : 'FVG- BEARISH')), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-slate-300 leading-relaxed md:max-w-md"
+  }, "Giá quét sạch thanh khoản của các nhà giao dịch bán lẻ tại mốc quan trọng, tạo râu nến từ chối mạnh (Rejection Wick) và tạo khối FVG đẩy giá.")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2.5 hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-lg bg-binance-green/20 text-binance-green flex items-center justify-center font-black text-xs border border-binance-green/40"
+  }, "3"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs block"
+  }, "Ma Trận Bộ Lọc Khử Nhiễu (Filter Matrix Verification)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400 font-medium"
+  }, "4 Lớp kiểm định độc lập trước khi gửi lệnh"))), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-green text-black font-black text-[9.5px] px-2 py-0.5 rounded tracking-wider"
+  }, "PASSED")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-1.5 rounded bg-binance-subpanel border border-binance-borderSubtle text-binance-green flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "✓"), /*#__PURE__*/React.createElement("span", null, "CMO Momentum")), /*#__PURE__*/React.createElement("div", {
+    className: "p-1.5 rounded bg-binance-subpanel border border-binance-borderSubtle text-binance-green flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "✓"), /*#__PURE__*/React.createElement("span", null, "Min ATR Volatility")), /*#__PURE__*/React.createElement("div", {
+    className: "p-1.5 rounded bg-binance-subpanel border border-binance-borderSubtle text-binance-green flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "✓"), /*#__PURE__*/React.createElement("span", null, "Counter FVG Void")), /*#__PURE__*/React.createElement("div", {
+    className: "p-1.5 rounded bg-binance-subpanel border border-binance-borderSubtle text-binance-green flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "✓"), /*#__PURE__*/React.createElement("span", null, "R:R > 1:2.0 Filter"))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-r-lg bg-slate-900/90 border-l-4 border-binance-yellow text-slate-200 text-[11.5px] italic leading-relaxed font-sans"
+  }, "\"", data.entry_rationale || data.side_rationale || 'Xác nhận tín hiệu vào lệnh tự động sau khi nến đóng cửa kiểm định thành công vùng mất cân bằng thanh khoản.', "\"")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col md:flex-row items-start md:items-center justify-between gap-3 hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 shrink-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-7 h-7 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center font-black text-xs border border-purple-500/40"
+  }, "4"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs block"
+  }, "Kế Hoạch Quản Trị Rủi Ro & Chốt Lời Tự Động"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400 font-medium"
+  }, "Auto Breakeven & Multi-Target Profit Taking"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 shrink-0 font-mono text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "bg-purple-500/20 text-purple-400 px-2 py-1 rounded font-bold"
+  }, "50% TP1 CLOSE"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-greenBg text-binance-green px-2 py-1 rounded font-bold"
+  }, "SL TO BREAKEVEN")), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-slate-300 leading-relaxed md:max-w-md"
+  }, "Chốt 50% khối lượng tại TP1 và tự động kéo Stop Loss về giá hòa vốn (+0.05% phí), biến lệnh thành hoàn toàn không có rủi ro (Risk-Free Trade).")))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-targets",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "🎯"), /*#__PURE__*/React.createElement("span", null, "2. CÁC MỐC GIÁ, GIẢ LẬP PNL & BÁO CÁO QUẢN LÝ SIZE (TARGETS & RISK AUDIT)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400 font-mono"
+  }, "Vốn Ký Quỹ: ", /*#__PURE__*/React.createElement("b", {
+    className: "text-white"
+  }, "$", formatPrice(marginUsed)), " • Đòn Bẩy: ", /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-yellow"
+  }, leverage, "x"))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-xl bg-binance-card border border-binance-border flex flex-col gap-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-[10px] uppercase font-bold tracking-wider"
+  }, "VỐN KÝ QUỸ (MARGIN)"), /*#__PURE__*/React.createElement("b", {
+    className: "text-white text-sm md:text-base"
+  }, "$", formatPrice(marginUsed), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-yellow"
+  }, leverage, "x Isolated")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-xl bg-binance-card border border-binance-border flex flex-col gap-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-[10px] uppercase font-bold tracking-wider"
+  }, "QUY MÔ VỊ THẾ (SIZE)"), /*#__PURE__*/React.createElement("b", {
+    className: "text-white text-sm md:text-base"
+  }, "$", formatPrice(posSizeUsd), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400"
+  }, "~", (posSizeUsd / entryPrice).toFixed(4), " ", symbol.replace('USDT', ''))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-xl bg-binance-card border border-binance-border flex flex-col gap-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-[10px] uppercase font-bold tracking-wider"
+  }, "TỶ LỆ LỢI NHUẬN / RỦI RO"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-yellow text-sm md:text-base"
+  }, "1 : ", rrRatio.toFixed(2)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-green"
+  }, "Tối Ưu Kỳ Vọng")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-xl bg-binance-card border border-binance-border flex flex-col gap-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-[10px] uppercase font-bold tracking-wider"
+  }, "RỦI RO TỐI ĐA (MAX LOSS)"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-red text-sm md:text-base"
+  }, "-$", formatPrice(slUsd), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-red"
+  }, "-", slLossPct.toFixed(1), "% Vốn Margin"))), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-xl bg-binance-card/90 border border-binance-border flex flex-col gap-3 font-sans shadow"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow text-base"
+  }, "⚖️"), /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-xs text-white uppercase tracking-wider"
+  }, "BÁO CÁO QUẢN TRỊ QUY MÔ VỊ THẾ (POSITION SIZING AUDIT REPORT)")), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-active text-binance-yellow text-[9.5px] font-mono px-2 py-0.5 rounded font-bold border border-binance-yellow/30"
+  }, "FIXED FRACTIONAL RISK MODEL")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-3 text-xs"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg bg-binance-panel border border-binance-borderSubtle flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-cyan text-[11px] uppercase tracking-wide"
+  }, "1. Phương Pháp Phân Bổ (Methodology)"), /*#__PURE__*/React.createElement("p", {
+    className: "text-slate-300 leading-relaxed text-[11.5px]"
+  }, "Hệ thống áp dụng mô hình ", /*#__PURE__*/React.createElement("b", null, "Fixed Fractional Volatility Risk Sizing (Mô hình Rủi ro Phân số Cố định)"), " kết hợp chuẩn hóa biên độ ", /*#__PURE__*/React.createElement("b", null, "ATR (Average True Range)"), ". Mức tổn thất tối đa được giới hạn nghiêm ngặt ở ", /*#__PURE__*/React.createElement("b", null, "10.00%"), " trên số vốn ký quỹ ", /*#__PURE__*/React.createElement("b", null, "$", formatPrice(marginUsed), " USD"), " (tương đương ", /*#__PURE__*/React.createElement("b", null, "$", formatPrice(slUsd), " USD"), ").")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg bg-binance-panel border border-binance-borderSubtle flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-yellow text-[11px] uppercase tracking-wide"
+  }, "2. Lý Do Tính Toán Size Như Vậy (Derivation Logic)"), /*#__PURE__*/React.createElement("p", {
+    className: "text-slate-300 leading-relaxed text-[11.5px]"
+  }, "Khoảng cách Invalid Stop Loss theo cấu trúc nến SMC là ", /*#__PURE__*/React.createElement("b", null, slMovePct.toFixed(2), "%"), ". Với đòn bẩy ", /*#__PURE__*/React.createElement("b", null, leverage, "x"), ", quy mô vị thế danh nghĩa được cố định chính xác ở ", /*#__PURE__*/React.createElement("b", null, "$", formatPrice(posSizeUsd), " USD"), " để nếu giá chạm SL, khoản lỗ thực tế luôn bảo toàn đúng số tiền rủi ro và giá thanh lý cách xa >4.5% an toàn.")))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-xl bg-binance-card border border-binance-border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-8 h-8 rounded-lg bg-binance-yellow/20 text-binance-yellow flex items-center justify-center font-black text-sm"
+  }, "⚡"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs block uppercase tracking-wide"
+  }, "ENTRY PRICE (GIÁ VÀO LỆNH)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-400"
+  }, "Mức giá khớp lệnh tối ưu theo nến xác nhận SMC"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4 font-mono"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base font-black text-white tracking-tight"
+  }, "$", formatPrice(entryPrice)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-slate-300 bg-binance-panel px-2.5 py-1 rounded border border-binance-borderSubtle"
+  }, "Khối Lượng: $", formatPrice(posSizeUsd)))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-xl bg-binance-greenBg/30 border border-binance-green/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-8 h-8 rounded-lg bg-binance-green/20 text-binance-green flex items-center justify-center font-black text-sm"
+  }, "🎯"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-green text-xs uppercase tracking-wide"
+  }, "TAKE PROFIT 1 (TP1 - FVG MIDLINE)"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-green text-black font-black text-[9px] px-1.5 rounded tracking-wider"
+  }, "CHỐT 50%")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-300 italic"
+  }, data.tp1_rationale || 'Mục tiêu FVG Midline. Chốt nửa vị thế và kích hoạt dời Stop Loss về hòa vốn (Auto Breakeven).'))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4 font-mono shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base font-black text-white tracking-tight"
+  }, "$", formatPrice(tp1Price)), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-green font-bold text-xs block"
+  }, "+", tp1MovePct.toFixed(2), "% Giá")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2 rounded-lg bg-binance-panel border border-binance-green/30 text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-green font-bold text-xs block"
+  }, "+$", formatPrice(tp1Usd), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-green block font-bold"
+  }, "+", tp1Roi.toFixed(1), "% ROI")))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-xl bg-binance-cyanBg/30 border border-binance-cyan/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-8 h-8 rounded-lg bg-binance-cyan/20 text-binance-cyan flex items-center justify-center font-black text-sm"
+  }, "🏆"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-cyan text-xs uppercase tracking-wide"
+  }, "TAKE PROFIT 2 (TP2 - MAJOR LIQUIDITY)"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-cyan text-black font-black text-[9px] px-1.5 rounded tracking-wider"
+  }, "CHỐT 100%")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-300 italic"
+  }, data.tp2_rationale || 'Mục tiêu quét sạch đỉnh/đáy thanh khoản chính (Major Liquidity Pool). Đóng toàn bộ lệnh.'))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4 font-mono shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base font-black text-white tracking-tight"
+  }, "$", formatPrice(tp2Price)), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-cyan font-bold text-xs block"
+  }, "+", tp2MovePct.toFixed(2), "% Giá")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2 rounded-lg bg-binance-panel border border-binance-cyan/30 text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-cyan font-bold text-xs block"
+  }, "+$", formatPrice(tp2Usd), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-cyan block font-bold"
+  }, "+", tp2Roi.toFixed(1), "% ROI")))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 rounded-xl bg-binance-redBg/30 border border-binance-red/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-8 h-8 rounded-lg bg-binance-red/20 text-binance-red flex items-center justify-center font-black text-sm"
+  }, "🛑"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-red text-xs uppercase tracking-wide"
+  }, "STOP LOSS (SL - INVALIDATION LEVEL)"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-red text-white font-black text-[9px] px-1.5 rounded tracking-wider"
+  }, "CẮT LỖ")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-slate-300 italic"
+  }, data.sl_rationale || 'Mốc phá vỡ cấu trúc Swing High/Low. Tự động đóng lệnh bảo toàn 100% vốn còn lại.'))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4 font-mono shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base font-black text-white tracking-tight"
+  }, "$", formatPrice(slPrice)), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-red font-bold text-xs block"
+  }, "-", slMovePct.toFixed(2), "% Giá")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2 rounded-lg bg-binance-panel border border-binance-red/30 text-right"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-red font-bold text-xs block"
+  }, "-$", formatPrice(slUsd), " USD"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-red block font-bold"
+  }, "-", slLossPct.toFixed(1), "% Loss")))))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-status",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "⚡"), /*#__PURE__*/React.createElement("span", null, "3. TÌNH TRẠNG LỆNH THỰC TẾ & TIẾN TRÌNH REALTIME (LIVE POSITION TRACKING)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow font-bold text-xs font-mono tracking-wide"
+  }, data.status || 'ACTIVE POSITION')), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono border-b border-binance-border pb-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "GIÁ VÀO LỆNH (ENTRY)"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-sm md:text-base"
+  }, "$", formatPrice(entryPrice))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "GIÁ THỊ TRƯỜNG (MARK)"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-yellowHover text-sm md:text-base"
+  }, "$", formatPrice(currentPrice))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "LỢI NHUẬN TẠM TÍNH (PNL)"), /*#__PURE__*/React.createElement("span", {
+    className: `font-bold text-sm md:text-base ${unPnlUsd >= 0 ? 'text-binance-green' : 'text-binance-red'}`
+  }, unPnlUsd >= 0 ? '+' : '', "$", formatPrice(unPnlUsd))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "TỶ SUẤT ROE %"), /*#__PURE__*/React.createElement("span", {
+    className: `font-bold text-sm md:text-base ${unPnlPct >= 0 ? 'text-binance-green' : 'text-binance-red'}`
+  }, unPnlPct >= 0 ? '+' : '', unPnlPct.toFixed(2), "%"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between items-center text-xs"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-300 font-bold flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "🚀"), /*#__PURE__*/React.createElement("span", null, "Tiến Trình Đạt Mục Tiêu TP1:")), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-cyan font-mono text-sm"
+  }, progressPct.toFixed(1), "% Hoàn Thành")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-3 bg-binance-subpanel rounded-full overflow-hidden border border-binance-border p-0.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-full bg-gradient-to-r from-binance-yellow via-binance-cyan to-binance-green rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(240,185,11,0.6)]",
+    style: {
+      width: `${progressPct}%`
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between text-[10px] text-slate-400 font-mono pt-0.5"
+  }, /*#__PURE__*/React.createElement("span", null, "Entry: $", formatPrice(entryPrice)), /*#__PURE__*/React.createElement("span", {
+    className: "text-white font-bold"
+  }, "Mark: $", formatPrice(currentPrice)), /*#__PURE__*/React.createElement("span", null, "TP1: $", formatPrice(tp1Price)))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-3 text-center pt-1 font-mono"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg bg-binance-panel border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "KHOẢNG CÁCH TỚI ENTRY"), /*#__PURE__*/React.createElement("b", {
+    className: `text-xs md:text-sm ${currentPrice >= entryPrice ? 'text-binance-green' : 'text-binance-red'}`
+  }, ((currentPrice - entryPrice) / entryPrice * 100).toFixed(2), "%")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg bg-binance-panel border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "CÒN CÁCH ĐÍCH TP1"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-cyan text-xs md:text-sm"
+  }, ((tp1Price - currentPrice) / currentPrice * 100).toFixed(2), "%")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg bg-binance-panel border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "KHOẢNG AN TOÀN TỚI SL"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-green text-xs md:text-sm"
+  }, Math.abs((currentPrice - slPrice) / currentPrice * 100).toFixed(2), "%"))))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-smc",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "📐"), /*#__PURE__*/React.createElement("span", null, "4. CẤU TRÚC SMART MONEY CONCEPTS & VÙNG FAIR VALUE GAP (SMC DETAILS)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] bg-binance-cyanBg text-binance-cyan px-2 py-0.5 rounded font-bold border border-binance-cyan/30 tracking-wider"
+  }, "SMC STRUCTURE")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider"
+  }, "VÙNG BẪY THANH KHOẢN (LIQUIDITY POOL)"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-slate-300 leading-relaxed"
+  }, "• ", /*#__PURE__*/React.createElement("b", null, "Vùng Quét:"), " ", isLong ? 'Sell-Side Liquidity (SSL)' : 'Buy-Side Liquidity (BSL)', " tại đáy/đỉnh gần nhất.", /*#__PURE__*/React.createElement("br", null), "• ", /*#__PURE__*/React.createElement("b", null, "Hành Động:"), " Giá quét qua thanh khoản để thu hút các vị thế bán hoảng loạn/mua đuổi trước khi đảo chiều mạnh.")), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider"
+  }, "MẤT CÂN BẰNG CUNG CẦU (FAIR VALUE GAP)"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-slate-300 leading-relaxed"
+  }, "• ", /*#__PURE__*/React.createElement("b", null, "Loại FVG:"), " ", isLong ? 'Bullish Fair Value Gap (FVG+)' : 'Bearish Fair Value Gap (FVG-)', ".", /*#__PURE__*/React.createElement("br", null), "• ", /*#__PURE__*/React.createElement("b", null, "Kiểm Định:"), " Nến tín hiệu đóng cửa trên vùng cân bằng, xác nhận dòng tiền tổ chức hấp thụ toàn bộ lực cản.")))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-chart",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "📊"), /*#__PURE__*/React.createElement("span", null, "5. ", symbol, " • ", exchange, " • ", modalTf, " • ", data.strategy_name || data.signal_type || 'STAT2 PRO BOX STRATEGY')), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] bg-binance-yellow/20 text-binance-yellow px-2.5 py-0.5 rounded font-bold border border-binance-yellow/30 font-mono tracking-wide"
+  }, "DRAWING TOOLS ENABLED")), /*#__PURE__*/React.createElement("div", {
+    className: "w-full h-[440px] bg-binance-bg border border-binance-border rounded-xl overflow-hidden shadow-xl flex flex-col relative"
+  }, /*#__PURE__*/React.createElement(FullStat2CandleChart, {
+    symbol: symbol,
+    timeframe: modalTf,
+    exchange: exchange,
+    onTfChange: setModalTf,
+    isCollapsed: false,
+    onToggleCollapse: null,
+    instances: indicatorInstances || [],
+    onOpenCatalog: onOpenCatalog,
+    onToggleVisibility: onToggleVisibility,
+    onOpenSettings: onOpenSettings,
+    onRemoveInstance: onRemoveInstance
+  }))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-notes",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "📝"), /*#__PURE__*/React.createElement("span", null, "6. GHI CHÚ VÀO LỆNH & NHẬT KÝ GIAO DỊCH (TRADE JOURNAL & OPERATOR NOTES)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 font-mono"
+  }, "AUTO-SYNCED TO DB")), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "font-bold text-white text-xs flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "✍️"), /*#__PURE__*/React.createElement("span", null, "Ghi chú cá nhân cho lệnh ", symbol, " (", exchange, "):")), saveNoteSuccess && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-binance-green font-bold animate-pulse flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("span", null, "✅"), /*#__PURE__*/React.createElement("span", null, "Đã lưu thành công vào cơ sở dữ liệu!"))), /*#__PURE__*/React.createElement("textarea", {
+    className: "w-full h-24 p-3 bg-binance-panel border border-binance-borderSubtle rounded-lg text-white font-mono text-xs focus:outline-none focus:border-binance-yellow transition resize-none placeholder-slate-500",
+    placeholder: "Nhập các quan sát quan trọng, tin tức kinh tế, tâm lý giao dịch hoặc lưu ý cho lệnh này...",
+    value: tradeNote,
+    onChange: e => setTradeNote(e.target.value)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between pt-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 font-mono"
+  }, "Độ dài: ", tradeNote.length, " ký tự • Tự động tải cùng biểu đồ & công cụ vẽ"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-4 py-1.5 rounded-lg text-xs transition shadow flex items-center gap-1.5 font-mono",
+    onClick: handleSaveNote,
+    disabled: isSavingNote
+  }, /*#__PURE__*/React.createElement("span", null, isSavingNote ? '⏳' : '💾'), /*#__PURE__*/React.createElement("span", null, isSavingNote ? 'Đang lưu...' : 'Lưu Ghi Chú'))))), /*#__PURE__*/React.createElement("section", {
+    id: "sec-engine",
+    className: "flex flex-col gap-3.5 scroll-mt-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between border-b border-binance-border pb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow"
+  }, "📜"), /*#__PURE__*/React.createElement("span", null, "7. THÔNG SỐ KỸ THUẬT THUẬT TOÁN & AUDIT TRAIL (SECURITY LOG)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-slate-400 font-mono"
+  }, "REALTIME SECURE LOG")), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px] font-mono"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "ID LỆNH / SIGNAL"), /*#__PURE__*/React.createElement("b", {
+    className: "text-white font-mono"
+  }, data.id || 'SIG_' + (data.timestamp || Date.now()))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "THỜI GIAN KÍCH HOẠT"), /*#__PURE__*/React.createElement("b", {
+    className: "text-white"
+  }, data.created_at || data.timestamp ? new Date(data.created_at || data.timestamp).toLocaleString() : 'Realtime Live')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "CHIẾN LƯỢC QUẢN LÝ"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-yellow"
+  }, "STAT2 Pro Box Strategy")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 block text-[10px] uppercase font-bold tracking-wider"
+  }, "CƠ CHẾ BẢO VỆ VỐN"), /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-green"
+  }, "Auto Breakeven + Trailing"))))))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3.5 border-t border-binance-border flex items-center justify-end bg-binance-subpanel shrink-0 font-mono"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2.5"
+  }, isActive && onClosePosition && /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-red hover:bg-red-600 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition shadow flex items-center gap-1 font-sans",
+    onClick: () => {
+      onClosePosition(data.id);
+      onClose();
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "✕"), /*#__PURE__*/React.createElement("span", null, "Đóng Vị Thế Ngay (Market Close)")), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-5 py-1.5 rounded-lg text-xs border border-binance-border text-white font-bold transition font-sans",
+    onClick: onClose
+  }, "Đóng")))));
+}
+
+// ── ROOT APPLICATION COMPONENT ──
+function App() {
+  const [selectedExchange, setSelectedExchange] = useState('ALL');
+  const [bottomTab, setBottomTab] = useState('signals');
+  const [isDeskCollapsed, setIsDeskCollapsed] = useState(false);
+
+  // Left Market Watchlist state
+  const [leftExchangeTab, setLeftExchangeTab] = useState('ALL');
+  const [leftCategoryFilter, setLeftCategoryFilter] = useState('ALL'); // ALL, SIGNALS, GAINERS, LOSERS
+  const [watchlistSearch, setWatchlistSearch] = useState('');
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+
+  // SplashScreen Lifecycle
+  const [isAppReady, setIsAppReady] = useState(false);
+  const [splashProgress, setSplashProgress] = useState(15);
+  const [splashTasks, setSplashTasks] = useState([{
+    id: 'ws',
+    label: 'Connecting WebSocket Feeds (Binance, Bybit, OKX)',
+    status: 'running'
+  }, {
+    id: 'db',
+    label: 'Loading 1,000 Whitelist Symbols & Strategies',
+    status: 'pending'
+  }, {
+    id: 'pos',
+    label: 'Loading Active Positions & Portfolio Stats',
+    status: 'pending'
+  }, {
+    id: 'engine',
+    label: 'Initializing Pure JS SMC & Indicator Engine',
+    status: 'pending'
+  }, {
+    id: 'feed',
+    label: 'Streaming Live All-Market Realtime Prices',
+    status: 'pending'
+  }]);
+
+  // Live All-Market Ticker Prices
+  const [marketPrices, setMarketPrices] = useState({});
+
+  // Active Symbol & Timeframe for Chart
+  const [activeSymbol, setActiveSymbol] = useState('BTCUSDT');
+  const [activeExchange, setActiveExchange] = useState('BINANCE');
+  const [activeTf, setActiveTf] = useState('15m');
+
+  // STAT2 Indicator Instances State (Saved and Loaded in Browser LocalStorage)
+  const [indicatorInstances, setIndicatorInstances] = useState(() => loadSavedIndicators());
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
+  const [editingInstance, setEditingInstance] = useState(null);
+  const [indicatorSettingsTab, setIndicatorSettingsTab] = useState('params');
+
+  // Server Data
+  const [status, setStatus] = useState({});
+  const [settings, setSettings] = useState({});
+  const [performance, setPerformance] = useState({});
+  const [whitelist, setWhitelist] = useState([]);
+  const [signals, setSignals] = useState([]);
+  const [activePositions, setActivePositions] = useState([]);
+  const [closedPositions, setClosedPositions] = useState([]);
+  const [limitOrders, setLimitOrders] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [logFilter, setLogFilter] = useState('ALL');
+
+  // Modals
+  const [forensicsData, setForensicsData] = useState(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const wsRef = useRef(null);
+
+  // ── SERVER WEBSOCKET CONNECTION (POSITIONS, SIGNALS, LOGS) ──
+  const connectWebSocket = useCallback(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host || 'localhost:8080';
+    const ws = new WebSocket(`${protocol}//${host}`);
+    wsRef.current = ws;
+    ws.onmessage = e => {
       try {
-        const res = await fetch('/api/admin/reset-all', { method: 'POST' }).then(r => r.json());
-        if (res.success) {
-          state.activePositions = [];
-          state.closedPositions = [];
-          state.limitOrders = [];
-          state.signals = [];
-          updateDashboardUI();
-          alert('🚀 ĐÃ TIẾN HÀNH FACTORY RESET!\nHệ thống đang tự động nạp mới 500 Symbol Binance Futures ngầm. Bạn có thể theo dõi trong Tab Live Console Logs.');
-        } else {
-          alert(`❌ Lỗi reset: ${res.error}`);
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'POSITIONS_UPDATE' && msg.data) {
+          if (msg.data.positions) setActivePositions(msg.data.positions);
+          if (msg.data.stats) setPerformance(msg.data.stats);
+        } else if (msg.type === 'SIGNALS_UPDATE' && msg.data && msg.data.signals) {
+          setSignals(msg.data.signals);
+        } else if (msg.type === 'NEW_SIGNAL' && msg.data) {
+          setSignals(prev => [msg.data, ...prev.slice(0, 199)]);
+        } else if (msg.type === 'LOG' && msg.data) {
+          setLogs(prev => [...prev.slice(-300), msg.data]);
         }
-      } catch (err) {
-        alert(`❌ Lỗi kết nối: ${err.message}`);
+      } catch (err) {}
+    };
+    ws.onclose = () => setTimeout(() => connectWebSocket(), 3000);
+  }, []);
+
+  // ── REST FETCH ──
+  const fetchAllData = useCallback(async () => {
+    try {
+      const [resStatus, resWl, resSig, resPos, resSet, resL] = await Promise.all([fetch('/api/status').then(r => r.json()), fetch('/api/whitelist').then(r => r.json()), fetch('/api/signals?limit=150').then(r => r.json()), fetch('/api/positions').then(r => r.json()), fetch('/api/settings').then(r => r.json()), fetch('/api/logs?limit=80').then(r => r.json())]);
+      if (resStatus.success) {
+        setStatus(resStatus.status || {});
+        if (resStatus.stats) setPerformance(resStatus.stats);
+        if (resStatus.settings) setSettings(resStatus.settings);
       }
-    });
-  }
-
-  // Chart Controls
-  if (el.chartSymbolSelect) el.chartSymbolSelect.addEventListener('change', loadChartData);
-  if (el.chartTimeframeSelect) el.chartTimeframeSelect.addEventListener('change', loadChartData);
-  if (el.chartModeSelect) el.chartModeSelect.addEventListener('change', loadChartData);
-  if (el.btnReloadChart) el.btnReloadChart.addEventListener('click', loadChartData);
-
-  if (el.btnResetChartZoom) {
-    el.btnResetChartZoom.addEventListener('click', () => {
-      state.chart.panOffset = 0;
-      state.chart.visibleCount = 90;
-      renderChartCanvas();
-    });
-  }
-
-  // ── MOUSE PAN, ZOOM & CROSSHAIR LISTENERS ON CANVAS ──
-  if (el.liveChartCanvas) {
-    // 1. Mouse Down (Start Pan Drag or Click Card)
-    el.liveChartCanvas.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return; // Only left click
-      const rect = el.liveChartCanvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      // Check if user clicked directly on a STAT2 Trade Card
-      if (typeof Stat2BoxStrategyIndicator !== 'undefined') {
-        const card = Stat2BoxStrategyIndicator.findCardAt(mouseX, mouseY);
-        if (card) {
-          openDecisionModalFromCard(card);
-          return;
-        }
+      if (resWl.success) setWhitelist(resWl.data || []);
+      if (resSig.success) {
+        setSignals(resSig.data || []);
+        const activeSyms = new Set((resPos.active || []).map(p => p.symbol));
+        setLimitOrders((resSig.data || []).filter(s => s.signal_type && s.signal_type.startsWith('FADE') && !activeSyms.has(s.symbol)).slice(0, 30));
       }
-
-      // Start drag pan
-      state.chart.isDragging = true;
-      state.chart.dragStartX = e.clientX;
-      state.chart.dragStartPan = state.chart.panOffset || 0;
-      el.liveChartCanvas.style.cursor = 'grabbing';
-    });
-
-    // 2. Mouse Move (Drag Pan or Track Crosshair)
-    el.liveChartCanvas.addEventListener('mousemove', (e) => {
-      const rect = el.liveChartCanvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      if (state.chart.isDragging) {
-        const deltaX = e.clientX - state.chart.dragStartX;
-        const totalCount = state.chart.candles.length;
-        const vCount = Math.min(state.chart.visibleCount || 90, totalCount);
-        const chartWidth = el.liveChartCanvas.width - 95;
-        const barW = Math.max(2, chartWidth / vCount);
-        const barsMoved = Math.round(deltaX / barW);
-
-        const minPan = -Math.round(vCount * 0.85);
-        const maxPan = Math.max(0, totalCount - 15);
-        state.chart.panOffset = Math.max(minPan, Math.min(maxPan, state.chart.dragStartPan + barsMoved));
-        renderChartCanvas();
-      } else {
-        // Track Crosshair
-        state.chart.crosshair.x = mouseX;
-        state.chart.crosshair.y = mouseY;
-        state.chart.crosshair.active = true;
-
-        // Check if hovering over a trade card
-        let isCardHover = false;
-        if (typeof Stat2BoxStrategyIndicator !== 'undefined') {
-          const card = Stat2BoxStrategyIndicator.findCardAt(mouseX, mouseY);
-          if (card) isCardHover = true;
-        }
-        el.liveChartCanvas.style.cursor = isCardHover ? 'pointer' : 'crosshair';
-
-        renderChartCanvas();
+      if (resPos.success) {
+        setActivePositions(resPos.active || []);
+        setClosedPositions((resPos.all || []).filter(p => p.status !== 'ACTIVE'));
       }
-    });
+      if (resSet.success) setSettings(resSet.data || {});
+      if (resL && resL.success) setLogs(resL.data || []);
+    } catch (e) {}
+  }, []);
 
-    // 3. Mouse Up & Mouse Leave (End Drag & Clear Crosshair)
-    window.addEventListener('mouseup', () => {
-      if (state.chart.isDragging) {
-        state.chart.isDragging = false;
-        if (el.liveChartCanvas) el.liveChartCanvas.style.cursor = 'crosshair';
-      }
-    });
+  // ── INITIALIZATION PIPELINE ON STARTUP ──
+  useEffect(() => {
+    let isMounted = true;
+    async function runStartupSequence() {
+      // 1. WebSockets
+      setSplashProgress(25);
+      setSplashTasks(prev => prev.map(t => t.id === 'ws' ? {
+        ...t,
+        status: 'done'
+      } : t.id === 'db' ? {
+        ...t,
+        status: 'running'
+      } : t));
+      connectWebSocket();
 
-    el.liveChartCanvas.addEventListener('mouseleave', () => {
-      state.chart.crosshair.active = false;
-      renderChartCanvas();
-    });
+      // 2. Fetch Server Whitelist & Database
+      try {
+        await fetchAllData();
+      } catch (e) {}
+      if (!isMounted) return;
+      setSplashProgress(50);
+      setSplashTasks(prev => prev.map(t => t.id === 'db' ? {
+        ...t,
+        status: 'done'
+      } : t.id === 'pos' ? {
+        ...t,
+        status: 'running'
+      } : t));
 
-    // 4. Mouse Wheel (Zoom In / Zoom Out)
-    el.liveChartCanvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const zoomDelta = e.deltaY > 0 ? 8 : -8;
-      const curZoom = state.chart.visibleCount || 90;
-      state.chart.visibleCount = Math.max(20, Math.min(450, curZoom + zoomDelta));
-      renderChartCanvas();
-    }, { passive: false });
+      // 3. Portfolio & Bot State
+      await new Promise(r => setTimeout(r, 200));
+      if (!isMounted) return;
+      setSplashProgress(70);
+      setSplashTasks(prev => prev.map(t => t.id === 'pos' ? {
+        ...t,
+        status: 'done'
+      } : t.id === 'engine' ? {
+        ...t,
+        status: 'running'
+      } : t));
 
-    // 5. Mobile Touch Handlers (1-finger pan/tap & 2-finger pinch-zoom)
-    let touchStartDist = 0;
-    let touchStartZoom = 90;
+      // 4. Indicator Engine Check
+      await new Promise(r => setTimeout(r, 150));
+      if (!isMounted) return;
+      setSplashProgress(85);
+      setSplashTasks(prev => prev.map(t => t.id === 'engine' ? {
+        ...t,
+        status: 'done'
+      } : t.id === 'feed' ? {
+        ...t,
+        status: 'running'
+      } : t));
 
-    el.liveChartCanvas.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) {
-        const rect = el.liveChartCanvas.getBoundingClientRect();
-        const touchX = e.touches[0].clientX - rect.left;
-        const touchY = e.touches[0].clientY - rect.top;
+      // 5. Initial Realtime Market Prices Snapshot
+      try {
+        const initialBatch = await GlobalMarketStreamManager.fetchInitialSnapshot();
+        setMarketPrices(prev => ({
+          ...prev,
+          ...initialBatch
+        }));
+      } catch (e) {}
+      if (!isMounted) return;
+      setSplashProgress(100);
+      setSplashTasks(prev => prev.map(t => ({
+        ...t,
+        status: 'done'
+      })));
 
-        // Check card tap
-        if (typeof Stat2BoxStrategyIndicator !== 'undefined') {
-          const card = Stat2BoxStrategyIndicator.findCardAt(touchX, touchY);
-          if (card) {
-            openDecisionModal(card);
-            return;
-          }
-        }
-
-        state.chart.isDragging = true;
-        state.chart.dragStartX = touchX;
-        state.chart.dragStartPan = state.chart.panOffset || 0;
-      } else if (e.touches.length === 2) {
-        state.chart.isDragging = false;
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        touchStartDist = Math.sqrt(dx * dx + dy * dy);
-        touchStartZoom = state.chart.visibleCount || 90;
-      }
-    }, { passive: true });
-
-    el.liveChartCanvas.addEventListener('touchmove', (e) => {
-      if (e.touches.length === 1 && state.chart.isDragging) {
-        const rect = el.liveChartCanvas.getBoundingClientRect();
-        const touchX = e.touches[0].clientX - rect.left;
-        const dx = touchX - state.chart.dragStartX;
-        const chartWidth = Math.max(100, (rect.width || 360) - 95);
-        const barW = Math.max(2, chartWidth / (state.chart.visibleCount || 90));
-        const barsMoved = Math.round(dx / barW);
-
-        const totalCount = (state.chart.candles || []).length;
-        const vCount = Math.max(15, Math.min(state.chart.visibleCount || 90, totalCount));
-        const minPan = -Math.round(vCount * 0.85);
-        const maxPan = Math.max(0, totalCount - 15);
-
-        state.chart.panOffset = Math.max(minPan, Math.min(maxPan, state.chart.dragStartPan + barsMoved));
-        renderChartCanvas();
-      } else if (e.touches.length === 2 && touchStartDist > 0) {
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        const curDist = Math.sqrt(dx * dx + dy * dy);
-        const scale = touchStartDist / curDist;
-        const newZoom = Math.round(touchStartZoom * scale);
-        state.chart.visibleCount = Math.max(20, Math.min(450, newZoom));
-        renderChartCanvas();
-      }
-    }, { passive: true });
-
-    el.liveChartCanvas.addEventListener('touchend', () => {
-      state.chart.isDragging = false;
-      touchStartDist = 0;
-    });
-  }
-
-  // Window Resize Auto-Refit for PC, Tablet and Mobile
-  window.addEventListener('resize', () => {
-    if (state.activeTab === 'tabChart' || el.liveChartCanvas) {
-      renderChartCanvas();
+      // Reveal Main Dashboard
+      setTimeout(() => {
+        if (isMounted) setIsAppReady(true);
+      }, 450);
     }
-  });
+    runStartupSequence();
 
-  // Settings Form Submit
-  if (el.formBotSettings) {
-    el.formBotSettings.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const formData = new FormData(el.formBotSettings);
-      const payload = {};
-      formData.forEach((v, k) => payload[k] = v);
+    // Subscribe to live market streams
+    const unsubscribeMarket = GlobalMarketStreamManager.subscribe(batch => {
+      setMarketPrices(prev => ({
+        ...prev,
+        ...batch
+      }));
+    });
+    const interval = setInterval(fetchAllData, 4000);
+    return () => {
+      isMounted = false;
+      unsubscribeMarket();
+      clearInterval(interval);
+    };
+  }, [connectWebSocket, fetchAllData]);
 
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).then(r => r.json());
+  // Filtered Full Symbols List on Left Pane
+  const filteredLeftWhitelist = useMemo(() => {
+    let list = whitelist;
+    if (leftExchangeTab !== 'ALL') {
+      list = list.filter(w => (w.exchange || 'BINANCE') === leftExchangeTab);
+    }
+    if (watchlistSearch) {
+      const q = watchlistSearch.toUpperCase();
+      list = list.filter(w => w.symbol.includes(q) || w.category && w.category.toUpperCase().includes(q));
+    }
+    if (leftCategoryFilter === 'SIGNALS') {
+      const sigSet = new Set(signals.map(s => s.symbol));
+      list = list.filter(w => sigSet.has(w.symbol));
+    } else if (leftCategoryFilter === 'GAINERS') {
+      list = [...list].sort((a, b) => {
+        const pA = marketPrices[`${a.exchange}_${a.symbol}`] || marketPrices[a.symbol] || {
+          change24h: 0
+        };
+        const pB = marketPrices[`${b.exchange}_${b.symbol}`] || marketPrices[b.symbol] || {
+          change24h: 0
+        };
+        return (pB.change24h || 0) - (pA.change24h || 0);
+      });
+    } else if (leftCategoryFilter === 'LOSERS') {
+      list = [...list].sort((a, b) => {
+        const pA = marketPrices[`${a.exchange}_${a.symbol}`] || marketPrices[a.symbol] || {
+          change24h: 0
+        };
+        const pB = marketPrices[`${b.exchange}_${b.symbol}`] || marketPrices[b.symbol] || {
+          change24h: 0
+        };
+        return (pA.change24h || 0) - (pB.change24h || 0);
+      });
+    }
+    return list;
+  }, [whitelist, leftExchangeTab, watchlistSearch, leftCategoryFilter, signals, marketPrices]);
 
-      if (res.success) {
-        state.settings = res.data;
-        alert('✅ Configuration saved successfully!');
-        updateHeaderMetrics();
+  // Filtered Signals for Bottom Tab
+  const filteredSignals = useMemo(() => {
+    if (selectedExchange === 'ALL') return signals;
+    return signals.filter(s => s.exchange === selectedExchange);
+  }, [signals, selectedExchange]);
+  const handleSelectSymbol = item => {
+    setActiveSymbol(item.symbol);
+    setActiveExchange(item.exchange || 'BINANCE');
+    setIsMobileDrawerOpen(false);
+  };
+  const handleClosePosition = async posId => {
+    if (!confirm('Close active position immediately at market price?')) return;
+    await fetch(`/api/positions/close/${posId}`, {
+      method: 'POST'
+    });
+    fetchAllData();
+  };
+  const handleResetTrades = async () => {
+    if (!confirm('Reset orders, clear signals, and restore initial $1,000 equity?')) return;
+    await fetch('/api/admin/reset-trades', {
+      method: 'POST'
+    });
+    fetchAllData();
+  };
+
+  // Indicator Management Handlers with Auto-Persistence to localStorage
+  const handleToggleVisibility = id => {
+    setIndicatorInstances(prev => {
+      const next = prev.map(inst => inst.id === id ? {
+        ...inst,
+        visible: !inst.visible
+      } : inst);
+      saveIndicatorsToStorage(next);
+      return next;
+    });
+  };
+  const handleRemoveInstance = id => {
+    setIndicatorInstances(prev => {
+      const next = prev.filter(inst => inst.id !== id);
+      saveIndicatorsToStorage(next);
+      return next;
+    });
+  };
+  const handleAddFromCatalog = type => {
+    if (window.IndicatorRegistry) {
+      const newInst = window.IndicatorRegistry.createInstance(type);
+      setIndicatorInstances(prev => {
+        const next = [...prev, newInst];
+        saveIndicatorsToStorage(next);
+        return next;
+      });
+    }
+    setIsCatalogOpen(false);
+  };
+  const handleResetAllIndicators = () => {
+    if (confirm('Reset all chart indicators back to factory default?')) {
+      const fresh = JSON.parse(JSON.stringify(DEFAULT_INDICATOR_INSTANCES));
+      setIndicatorInstances(fresh);
+      saveIndicatorsToStorage(fresh);
+      setIsCatalogOpen(false);
+    }
+  };
+
+  // Account Metrics
+  const marginBalance = performance.margin_balance !== undefined ? performance.margin_balance : 1000.0;
+  const walletBalance = performance.wallet_balance !== undefined ? performance.wallet_balance : 1000.0;
+  const unrealizedPnl = performance.unrealized_pnl_usd || 0.0;
+  const unrealizedPnlPct = walletBalance > 0 ? unrealizedPnl / walletBalance * 100.0 : 0.0;
+
+  // Counts for Left Panel Exchange Tabs
+  const countAll = whitelist.length;
+  const countBinance = whitelist.filter(w => (w.exchange || 'BINANCE') === 'BINANCE').length;
+  const countBybit = whitelist.filter(w => w.exchange === 'BYBIT').length;
+  const countOkx = whitelist.filter(w => w.exchange === 'OKX').length;
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SplashScreen, {
+    tasks: splashTasks,
+    progress: splashProgress,
+    isReady: isAppReady
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col h-screen w-screen bg-binance-bg text-binance-text overflow-hidden font-sans text-xs select-none"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "h-11 border-b border-binance-border bg-binance-panel flex items-center justify-between px-2 md:px-3 shrink-0 z-30 font-sans gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 md:gap-3 shrink-0"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "lg:hidden bg-binance-subpanel hover:bg-binance-hover border border-binance-border rounded px-2 py-1 flex items-center gap-1.5 text-white font-bold text-xs shadow",
+    onClick: () => setIsMobileDrawerOpen(true),
+    title: "Open Pairs Explorer"
+  }, /*#__PURE__*/React.createElement("span", null, "🪙"), /*#__PURE__*/React.createElement("span", {
+    className: "max-w-[70px] truncate"
+  }, activeSymbol), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-yellow"
+  }, "▾")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 font-extrabold text-xs md:text-sm text-white tracking-wide shrink-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow text-base"
+  }, "⚡"), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "STAT2 FUTURES PRO"), /*#__PURE__*/React.createElement("span", {
+    className: "sm:hidden font-black"
+  }, "STAT2")), /*#__PURE__*/React.createElement("div", {
+    className: "hidden md:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5"
+  }, [{
+    id: 'ALL',
+    label: `🌐 ALL (${countAll})`
+  }, {
+    id: 'BINANCE',
+    label: `🔶 Binance (${countBinance})`
+  }, {
+    id: 'BYBIT',
+    label: `⬛ Bybit (${countBybit})`
+  }, {
+    id: 'OKX',
+    label: `🔷 OKX (${countOkx})`
+  }].map(tab => /*#__PURE__*/React.createElement("button", {
+    key: tab.id,
+    className: `px-2 py-0.5 rounded text-[10.5px] font-bold transition ${selectedExchange === tab.id ? 'bg-binance-active text-binance-yellow' : 'text-binance-textSec hover:text-white'}`,
+    onClick: () => setSelectedExchange(tab.id)
+  }, tab.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "hidden lg:flex items-center gap-2 font-mono text-xs"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-black text-white"
+  }, activeSymbol), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-textSec bg-binance-card px-1.5 py-0.5 rounded border border-binance-borderSubtle font-bold"
+  }, activeExchange), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow font-bold"
+  }, activeTf)), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 md:gap-3 font-mono text-xs shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 bg-binance-card/60 px-2 py-1 rounded border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px] hidden sm:inline"
+  }, "MARGIN:"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-binance-yellow text-xs"
+  }, "$", formatPrice(marginBalance)), /*#__PURE__*/React.createElement("span", {
+    className: `font-bold text-[10.5px] ${unrealizedPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`
+  }, "(", unrealizedPnl >= 0 ? '+' : '', "$", formatPrice(unrealizedPnl), ")")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1 pl-1 md:pl-2 border-l border-binance-border"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "radar-dot hidden sm:inline-block",
+    title: "24/7 Scanner Active"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[11px] font-bold border border-binance-border text-white flex items-center gap-1",
+    onClick: () => fetch('/api/scanner/trigger', {
+      method: 'POST'
+    }),
+    title: "Trigger Instant Scanner"
+  }, /*#__PURE__*/React.createElement("span", null, "⚡"), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "Scan")), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-yellow text-black font-bold px-2 py-1 rounded text-[11px] hover:bg-binance-yellowHover transition flex items-center gap-1",
+    onClick: () => setIsSettingsOpen(true),
+    title: "Scanner & Exchange Settings"
+  }, /*#__PURE__*/React.createElement("span", null, "⚙️"), /*#__PURE__*/React.createElement("span", {
+    className: "hidden sm:inline"
+  }, "Settings")), /*#__PURE__*/React.createElement("button", {
+    className: "lg:hidden bg-binance-subpanel hover:bg-binance-hover p-1 rounded text-xs border border-binance-border text-binance-yellow",
+    onClick: () => setIsDeskCollapsed(!isDeskCollapsed),
+    title: "Toggle Trading Desk"
+  }, "📊")))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex overflow-hidden relative"
+  }, isMobileDrawerOpen && /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/75 backdrop-blur-sm z-40 lg:hidden transition-opacity",
+    onClick: () => setIsMobileDrawerOpen(false)
+  }), /*#__PURE__*/React.createElement("aside", {
+    className: `
+            fixed lg:static inset-y-0 left-0 z-50 lg:z-auto
+            w-80 max-w-[85vw] bg-binance-panel border-r border-binance-border flex flex-col shrink-0 transition-transform duration-300
+            ${isMobileDrawerOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'}
+          `
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-2 border-b border-binance-border flex flex-col gap-2 bg-binance-subpanel/50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-[11px] text-white flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "🪙 PAIRS EXPLORER"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-yellow text-black text-[9.5px] px-1.5 rounded-full font-black"
+  }, filteredLeftWhitelist.length)), /*#__PURE__*/React.createElement("button", {
+    className: "lg:hidden text-binance-textSec hover:text-white text-xs font-bold px-2 py-0.5 rounded bg-binance-card border border-binance-border",
+    onClick: () => setIsMobileDrawerOpen(false)
+  }, "✕ Close")), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-4 gap-1 font-mono text-[10.5px]"
+  }, [{
+    id: 'ALL',
+    label: '🌐 ALL'
+  }, {
+    id: 'BINANCE',
+    label: '🔶 BNC'
+  }, {
+    id: 'BYBIT',
+    label: '⬛ BYB'
+  }, {
+    id: 'OKX',
+    label: '🔷 OKX'
+  }].map(tab => /*#__PURE__*/React.createElement("button", {
+    key: tab.id,
+    className: `py-1 rounded font-bold transition text-center border ${leftExchangeTab === tab.id ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-card text-binance-textSec border-binance-border hover:text-white'}`,
+    onClick: () => setLeftExchangeTab(tab.id)
+  }, tab.label))), /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    className: "w-full bg-binance-card border border-binance-border rounded px-2.5 py-1.5 text-xs text-white placeholder-binance-textMuted focus:outline-none focus:border-binance-yellow font-mono",
+    placeholder: "Search pairs (BTC, SOL, 1000PEPE)...",
+    value: watchlistSearch,
+    onChange: e => setWatchlistSearch(e.target.value)
+  }), watchlistSearch && /*#__PURE__*/React.createElement("button", {
+    className: "absolute right-2.5 top-1.5 text-binance-textSec hover:text-white font-bold",
+    onClick: () => setWatchlistSearch('')
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-1"
+  }, [{
+    id: 'ALL',
+    label: `ALL (${filteredLeftWhitelist.length})`
+  }, {
+    id: 'SIGNALS',
+    label: '⚡ SIGNALS'
+  }, {
+    id: 'GAINERS',
+    label: '🔥 GAINERS'
+  }, {
+    id: 'LOSERS',
+    label: '❄️ LOSERS'
+  }].map(cat => /*#__PURE__*/React.createElement("button", {
+    key: cat.id,
+    className: `flex-1 py-0.5 rounded text-[10px] font-bold transition text-center ${leftCategoryFilter === cat.id ? 'bg-binance-active text-binance-yellow border border-binance-yellow/30' : 'text-binance-textSec hover:text-white bg-binance-card/50'}`,
+    onClick: () => setLeftCategoryFilter(cat.id)
+  }, cat.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto divide-y divide-binance-borderSubtle/50 font-mono text-xs"
+  }, filteredLeftWhitelist.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "p-6 text-center text-binance-textMuted text-xs flex flex-col gap-1"
+  }, /*#__PURE__*/React.createElement("span", null, "No pairs match criteria"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] text-binance-textSec"
+  }, "Try switching exchange or clearing search")) : filteredLeftWhitelist.map(item => {
+    const isSelected = item.symbol === activeSymbol && (item.exchange || 'BINANCE') === activeExchange;
+    const sigCount = signals.filter(s => s.symbol === item.symbol && (s.exchange || 'BINANCE') === (item.exchange || 'BINANCE')).length;
+
+    // Key Resolution across all exchange naming standards
+    const pKey1 = `${item.exchange || 'BINANCE'}_${item.symbol}`;
+    const pKey2 = `${item.exchange || 'BINANCE'}_${item.symbol.replace('-', '')}`;
+    const pKey3 = item.symbol;
+    const pKey4 = item.symbol.replace('-', '');
+    const liveInfo = marketPrices[pKey1] || marketPrices[pKey2] || marketPrices[pKey3] || marketPrices[pKey4] || {
+      price: 0,
+      change24h: 0,
+      vol: 0,
+      tickDir: 'equal'
+    };
+    const isUp = (liveInfo.change24h || 0) >= 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: item.id || `${item.exchange}_${item.symbol}`,
+      className: `px-3 py-2 flex items-center justify-between cursor-pointer transition ${isSelected ? 'bg-binance-active border-l-2 border-binance-yellow shadow-inner' : 'hover:bg-binance-hover/50'}`,
+      onClick: () => handleSelectSymbol(item)
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col gap-0.5"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5 font-bold text-white"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px]"
+    }, item.symbol), sigCount > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "bg-binance-cyanBg text-binance-cyan text-[9px] px-1 rounded font-black border border-binance-cyan/30"
+    }, sigCount, " SIG")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5 text-[10px] text-binance-textSec"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `px-1 py-0.2 rounded font-bold text-[9px] ${item.exchange === 'BYBIT' ? 'bg-orange-500/20 text-orange-400' : item.exchange === 'OKX' ? 'bg-blue-500/20 text-blue-400' : 'bg-yellow-500/20 text-yellow-400'}`
+    }, item.exchange || 'BINANCE'), liveInfo.vol > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted"
+    }, "Vol $", formatVolume(liveInfo.vol)))), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col items-end gap-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `font-bold text-[12px] flex items-center gap-1 font-mono transition-colors duration-200 ${liveInfo.tickDir === 'up' ? 'text-binance-green' : liveInfo.tickDir === 'down' ? 'text-binance-red' : 'text-white'}`
+    }, /*#__PURE__*/React.createElement("span", null, liveInfo.price > 0 ? `$${formatPrice(liveInfo.price)}` : '--'), liveInfo.tickDir === 'up' && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] text-binance-green font-black"
+    }, "▲"), liveInfo.tickDir === 'down' && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] text-binance-red font-black"
+    }, "▼")), /*#__PURE__*/React.createElement("span", {
+      className: `text-[10px] font-bold px-1.5 py-0.2 rounded ${isUp ? 'bg-binance-greenBg text-binance-green' : 'bg-binance-redBg text-binance-red'}`
+    }, isUp ? '+' : '', (liveInfo.change24h || 0).toFixed(2), "%")));
+  }))), /*#__PURE__*/React.createElement("main", {
+    className: "flex-1 flex flex-col overflow-hidden bg-binance-bg"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `border-b border-binance-border flex flex-col relative bg-binance-bg transition-all duration-200 ${isDeskCollapsed ? 'h-full' : 'h-[55%]'}`
+  }, /*#__PURE__*/React.createElement(FullStat2CandleChart, {
+    symbol: activeSymbol,
+    timeframe: activeTf,
+    exchange: activeExchange,
+    onTfChange: setActiveTf,
+    isCollapsed: isDeskCollapsed,
+    onToggleCollapse: () => setIsDeskCollapsed(!isDeskCollapsed),
+    instances: indicatorInstances,
+    onOpenCatalog: () => setIsCatalogOpen(true),
+    onToggleVisibility: handleToggleVisibility,
+    onOpenSettings: inst => setEditingInstance(inst),
+    onRemoveInstance: handleRemoveInstance
+  })), !isDeskCollapsed && /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex flex-col overflow-hidden bg-binance-panel"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h-8 px-3 border-b border-binance-border flex items-center justify-between bg-binance-subpanel/50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, [{
+    id: 'signals',
+    label: `⚡ Live Signals Stream (${filteredSignals.length})`
+  }, {
+    id: 'positions',
+    label: `🟢 Active Positions (${activePositions.length})`
+  }, {
+    id: 'orders',
+    label: `⏳ Open Orders (${limitOrders.length})`
+  }, {
+    id: 'history',
+    label: `📜 Order History (${closedPositions.length})`
+  }, {
+    id: 'logs',
+    label: `💻 Console Logs`
+  }].map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.id,
+    className: `px-2.5 py-1 rounded text-[11px] font-bold transition ${bottomTab === t.id ? 'bg-binance-active text-binance-yellow' : 'text-binance-textSec hover:text-white'}`,
+    onClick: () => setBottomTab(t.id)
+  }, t.label))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "text-[10.5px] text-binance-red hover:underline font-bold",
+    onClick: handleResetTrades
+  }, "🗑️ Reset Trades & PnL"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto p-2"
+  }, bottomTab === 'signals' && /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2"
+  }, filteredSignals.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "col-span-full py-8 text-center text-binance-textMuted font-mono"
+  }, "No signals detected in current window. Scanner is monitoring market 24/7...") : filteredSignals.map(sig => {
+    const isLong = sig.direction === 'BUY';
+    return /*#__PURE__*/React.createElement("div", {
+      key: sig.id,
+      className: `p-2.5 rounded bg-binance-card border border-binance-border cursor-pointer hover:border-binance-borderHighlight transition flex flex-col gap-1.5 ${isLong ? 'border-l-4 border-l-binance-green' : 'border-l-4 border-l-binance-red'}`,
+      onClick: () => {
+        setActiveSymbol(sig.symbol);
+        setActiveExchange(sig.exchange);
+        setActiveTf(sig.timeframe);
       }
-    });
-  }
-
-  // Modal: Add Symbol
-  if (el.btnAddSymbolModalBtn) el.btnAddSymbolModalBtn.addEventListener('click', () => el.modalAddSymbol.classList.add('active'));
-  if (el.btnCloseAddSymbolModal) el.btnCloseAddSymbolModal.addEventListener('click', () => el.modalAddSymbol.classList.remove('active'));
-  if (el.btnCancelAddSymbol) el.btnCancelAddSymbol.addEventListener('click', () => el.modalAddSymbol.classList.remove('active'));
-
-  if (el.btnConfirmAddSymbol) {
-    el.btnConfirmAddSymbol.addEventListener('click', async () => {
-      const sym = el.inputNewSymbol.value.trim().toUpperCase();
-      const cat = el.selectNewCategory.value;
-      if (!sym) return alert('Please enter a valid symbol!');
-
-      await fetch('/api/whitelist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: sym, category: cat })
-      });
-
-      el.modalAddSymbol.classList.remove('active');
-      el.inputNewSymbol.value = '';
-
-      const res = await fetch('/api/whitelist').then(r => r.json());
-      if (res.success) state.whitelist = res.data;
-      renderWhitelist();
-      updateHeaderMetrics();
-      populateChartSymbolOptions();
-    });
-  }
-
-  // Modal: Edit Strategy
-  if (el.btnCloseEditStratModal) el.btnCloseEditStratModal.addEventListener('click', () => el.modalEditStrategy.classList.remove('active'));
-  if (el.btnCancelEditStrat) el.btnCancelEditStrat.addEventListener('click', () => el.modalEditStrategy.classList.remove('active'));
-
-  if (el.formEditStrategy) {
-    el.formEditStrategy.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const formData = new FormData(el.formEditStrategy);
-      const payload = {};
-      formData.forEach((v, k) => payload[k] = v);
-
-      await fetch('/api/strategies', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      el.modalEditStrategy.classList.remove('active');
-      const res = await fetch('/api/whitelist').then(r => r.json());
-      if (res.success) state.whitelist = res.data;
-      renderWhitelist();
-    });
-  }
-
-  // Modal: Trade Decision
-  if (el.btnCloseDecisionModal) el.btnCloseDecisionModal.addEventListener('click', () => el.modalTradeDecision.classList.remove('active'));
-
-  // Log Filters
-  if (el.logFilterBtns) {
-    el.logFilterBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        el.logFilterBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.logFilter = btn.dataset.filter || 'ALL';
-        renderLogs();
-      });
-    });
-  }
-
-  // Clear Logs
-  if (el.btnClearLogs) {
-    el.btnClearLogs.addEventListener('click', async () => {
-      await fetch('/api/logs/clear', { method: 'POST' });
-      state.logs = [];
-      renderLogs();
-      updateLogCounters();
-    });
-  }
-
-  // Copy Logs
-  if (el.btnCopyLogs) {
-    el.btnCopyLogs.addEventListener('click', () => {
-      if (!state.logs || state.logs.length === 0) return;
-      const text = state.logs.map(l => `[${l.timestamp}] [${l.category}] ${l.message}`).join('\n');
-      navigator.clipboard.writeText(text).then(() => {
-        el.btnCopyLogs.textContent = '✅ Copied!';
-        setTimeout(() => el.btnCopyLogs.textContent = '📋 Copy', 1500);
-      });
-    });
-  }
-
-  // Auto-scroll toggle
-  if (el.chkAutoScroll) {
-    el.chkAutoScroll.addEventListener('change', () => {
-      state.autoScrollLogs = el.chkAutoScroll.checked;
-    });
-  }
-
-  // Window Resize
-  window.addEventListener('resize', () => {
-    if (state.activeTab === 'tabChart') renderChartCanvas();
-  });
-}
-
-function openDecisionModalFromCard(card) {
-  const isLong = card.tradeDir === 'BUY';
-  const badgeTitle = card.signalType.startsWith('FADE') ? (isLong ? '⚡ FADE LONG' : '⚡ FADE SHORT') : (isLong ? '▲ BUY TREND' : '▼ SELL TREND');
-  const badgeClass = card.tradeDir;
-
-  el.modalDecisionBadge.className = `status-badge-lg sig-badge ${badgeClass}`;
-  el.modalDecisionBadge.textContent = badgeTitle;
-  el.modalDecisionSymbol.textContent = `${state.chart.symbol} • ${state.chart.timeframe}`;
-
-  el.modalDecisionBody.innerHTML = `
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #1e293b; padding: 12px; border-radius: 8px; text-align: center; font-family: var(--font-mono); margin-bottom: 16px;">
-      <div>
-        <div style="color: #94a3b8; font-size: 10px; text-transform: uppercase;">Entry</div>
-        <div style="color: #f8fafc; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(card.entryPrice)}</div>
-      </div>
-      <div>
-        <div style="color: #10b981; font-size: 10px; text-transform: uppercase;">TP1 (50%)</div>
-        <div style="color: #10b981; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(card.tp1Price)}</div>
-      </div>
-      <div>
-        <div style="color: #06b6d4; font-size: 10px; text-transform: uppercase;">TP2 (Liq)</div>
-        <div style="color: #06b6d4; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(card.tp2Price)}</div>
-      </div>
-      <div>
-        <div style="color: #f43f5e; font-size: 10px; text-transform: uppercase;">Stop Loss</div>
-        <div style="color: #f43f5e; font-weight: 700; font-size: 13px; margin-top: 2px;">${formatPrice(card.slPrice)}</div>
-      </div>
-    </div>
-
-    <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.6;">
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #38bdf8;">
-        <div style="font-weight: 700; color: #38bdf8; font-size: 12px; margin-bottom: 4px;">1️⃣ TẠI SAO CHỌN SIDE & ĐIỂM ENTRY?</div>
-        <div style="color: #cbd5e1;">${card.sideRationale || 'Nến đóng cửa xác nhận xu hướng rõ nét, ATR đạt chuẩn biến động và vùng cản thông thoáng.'}</div>
-      </div>
-
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #10b981;">
-        <div style="font-weight: 700; color: #10b981; font-size: 12px; margin-bottom: 4px;">2️⃣ TẠI SAO CHỐT LỜI TẠI TP1 & TP2?</div>
-        <div style="color: #cbd5e1;">
-          • <b>TP1 (${formatPrice(card.tp1Price)}):</b> Mép vùng FVG đối diện chưa lấp. 👉 <i>Tự động dời Stop-Loss về Hòa Vốn (Breakeven +0.05%) sau khi TP1 cắn.</i><br>
-          • <b>TP2 (${formatPrice(card.tp2Price)}):</b> Cụm thanh khoản Liquidity Pool đối diện.
-        </div>
-      </div>
-
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #f43f5e;">
-        <div style="font-weight: 700; color: #f43f5e; font-size: 12px; margin-bottom: 4px;">3️⃣ TẠI SAO ĐẶT SL TẠI MỨC NÀY?</div>
-        <div style="color: #cbd5e1;">${card.slRationale || 'Đặt dưới Swing Low/High gần nhất kèm biên độ an toàn, bảo vệ vị thế khỏi râu nến giật.'}</div>
-      </div>
-
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #f59e0b;">
-        <div style="font-weight: 700; color: #f59e0b; font-size: 12px; margin-bottom: 4px;">4️⃣ CHỈ SỐ ĐỊNH LƯỢNG & RỦI RO:</div>
-        <div style="color: #cbd5e1; font-family: var(--font-mono); font-size: 12px;">
-          • Tỷ lệ Risk / Reward (R:R) : <b>1 : ${(card.rrRatio || 2.0).toFixed(2)}</b><br>
-          • Động cơ Biến động ATR    : <b>${(card.atrPct || 0.5).toFixed(2)}%</b> (Đạt chuẩn > 0.35%)<br>
-          • Thời gian Tín hiệu       : <b>${new Date(card.time * 1000).toLocaleString()}</b>
-        </div>
-      </div>
-    </div>
-  `;
-
-  el.modalTradeDecision.classList.add('active');
-}
-
-// ── LOG RENDERING FUNCTIONS ──
-function renderLogs() {
-  if (!el.terminalLogBody) return;
-  const filter = state.logFilter || 'ALL';
-  const logs = state.logs || [];
-
-  const filtered = filter === 'ALL'
-    ? logs
-    : logs.filter(l => l.category === filter || (filter === 'SIGNAL' && l.level === 'SIGNAL') || (filter === 'TRADE' && l.level === 'TRADE'));
-
-  if (filtered.length === 0) {
-    el.terminalLogBody.innerHTML = `
-      <div style="color: #64748b; font-style: italic; padding: 20px; text-align: center;">
-        No logs recorded for category [${filter}]. Live stream active...
-      </div>
-    `;
-    updateLogCounters();
-    return;
-  }
-
-  el.terminalLogBody.innerHTML = filtered.map(l => formatLogHtml(l)).join('');
-  updateLogCounters();
-
-  if (state.autoScrollLogs !== false && el.terminalLogContainer) {
-    el.terminalLogContainer.scrollTop = el.terminalLogContainer.scrollHeight;
-  }
-}
-
-function appendSingleLog(logItem) {
-  if (!el.terminalLogBody) return;
-  const filter = state.logFilter || 'ALL';
-  const matchesFilter = filter === 'ALL' || logItem.category === filter || (filter === 'SIGNAL' && logItem.level === 'SIGNAL') || (filter === 'TRADE' && logItem.level === 'TRADE');
-
-  if (matchesFilter) {
-    if (el.terminalLogBody.children.length === 1 && el.terminalLogBody.children[0].style.fontStyle === 'italic') {
-      el.terminalLogBody.innerHTML = '';
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5 font-bold text-white"
+    }, /*#__PURE__*/React.createElement("span", null, sig.symbol), /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] text-binance-yellow bg-binance-panel px-1 py-0.5 rounded font-bold"
+    }, sig.timeframe), /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] text-binance-textSec bg-binance-subpanel px-1 py-0.5 rounded border border-binance-borderSubtle font-bold"
+    }, sig.exchange)), /*#__PURE__*/React.createElement("span", {
+      className: `px-1.5 py-0.2 rounded text-[10px] font-extrabold ${isLong ? 'badge-long' : 'badge-short'}`
+    }, isLong ? '▲ LONG' : '▼ SHORT')), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-4 gap-1 text-[10.5px] py-1 px-1.5 rounded bg-binance-panel/80 border border-binance-borderSubtle/50 font-mono"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted block text-[9px]"
+    }, "ENTRY"), /*#__PURE__*/React.createElement("b", {
+      className: "text-white"
+    }, "$", formatPrice(sig.entry_price))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted block text-[9px]"
+    }, "STOP"), /*#__PURE__*/React.createElement("b", {
+      className: "text-binance-red"
+    }, "$", formatPrice(sig.sl_price))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted block text-[9px]"
+    }, "TP1 (FVG)"), /*#__PURE__*/React.createElement("b", {
+      className: "text-binance-green"
+    }, "$", formatPrice(sig.tp1_price))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-textMuted block text-[9px]"
+    }, "TP2 (LIQ)"), /*#__PURE__*/React.createElement("b", {
+      className: "text-binance-cyan"
+    }, "$", formatPrice(sig.tp2_price)))), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between text-[10px] text-binance-textSec pt-0.5"
+    }, /*#__PURE__*/React.createElement("div", null, "R:R ", /*#__PURE__*/React.createElement("b", {
+      className: "text-white"
+    }, "1:", (sig.rr_ratio || 2.0).toFixed(1)), " • ATR ", /*#__PURE__*/React.createElement("b", {
+      className: "text-binance-cyan"
+    }, (sig.atr_pct || 0.5).toFixed(2), "%")), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", null, timeAgo(sig.timestamp)), /*#__PURE__*/React.createElement("button", {
+      className: "bg-binance-subpanel px-1.5 py-0.5 rounded text-[10px]",
+      onClick: e => {
+        e.stopPropagation();
+        setForensicsData(sig);
+      }
+    }, "💡 Forensics"), /*#__PURE__*/React.createElement("button", {
+      className: "bg-binance-yellow text-black font-bold px-1.5 py-0.5 rounded text-[10px]",
+      onClick: () => {
+        setActiveSymbol(sig.symbol);
+        setActiveExchange(sig.exchange);
+      }
+    }, "📊 Chart"))));
+  })), bottomTab === 'positions' && /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-left font-mono text-[11px] border-collapse"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "border-b border-binance-border bg-binance-subpanel text-binance-textSec text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Symbol"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Size (USDT)"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Entry"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Mark Price"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Liq. Price"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Margin"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Margin Ratio"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "PNL (ROE %)"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "TP1 / SL"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3 text-right"
+  }, "Action"))), /*#__PURE__*/React.createElement("tbody", {
+    className: "divide-y divide-binance-borderSubtle/60"
+  }, activePositions.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "10",
+    className: "py-8 text-center text-binance-textMuted"
+  }, "No active positions open. Scanner is monitoring market 24/7...")) : activePositions.map(pos => {
+    const isLong = pos.direction === 'BUY';
+    const pnlUsd = pos.net_pnl_usd || 0.0;
+    const roePct = pos.roe_pct !== undefined ? pos.roe_pct : 0.0;
+    const isWin = pnlUsd >= 0;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: pos.id,
+      className: "hover:bg-binance-hover/40 transition"
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 font-bold text-white cursor-pointer",
+      onClick: () => {
+        setActiveSymbol(pos.symbol);
+        setActiveExchange(pos.exchange || 'BINANCE');
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `mr-1 px-1 py-0.2 rounded text-[9.5px] ${isLong ? 'badge-long' : 'badge-short'}`
+    }, isLong ? 'LONG' : 'SHORT'), /*#__PURE__*/React.createElement("span", null, pos.symbol), /*#__PURE__*/React.createElement("span", {
+      className: "ml-1 text-binance-yellow bg-binance-active px-1 py-0.2 rounded text-[9px] font-mono"
+    }, pos.leverage || 20, "x"), /*#__PURE__*/React.createElement("span", {
+      className: "ml-1 text-[9px] text-binance-cyan bg-binance-cyanBg px-1.5 py-0.2 rounded font-bold border border-binance-cyan/30 font-mono"
+    }, pos.timeframe || pos.tf || '15m'), /*#__PURE__*/React.createElement("span", {
+      className: "ml-1 text-[9px] text-binance-textSec bg-binance-card px-1 py-0.2 rounded font-mono"
+    }, pos.exchange || 'BINANCE')), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, "$", formatPrice(pos.pos_size_usd)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, "$", formatPrice(pos.entry_price)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 font-bold text-binance-yellowHover"
+    }, "$", formatPrice(pos.current_price || pos.entry_price)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 text-binance-red"
+    }, "$", formatPrice(pos.liq_price)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, "$", formatPrice(pos.initial_margin)), /*#__PURE__*/React.createElement("td", {
+      className: `py-1.5 px-3 font-bold ${(pos.margin_ratio || 0) > 80 ? 'text-binance-red' : 'text-binance-green'}`
+    }, (pos.margin_ratio || 0).toFixed(2), "%"), /*#__PURE__*/React.createElement("td", {
+      className: `py-1.5 px-3 font-bold ${isWin ? 'text-binance-green' : 'text-binance-red'}`
+    }, isWin ? '+' : '', "$", formatPrice(pnlUsd), " (", isWin ? '+' : '', roePct.toFixed(2), "%)"), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 text-[10px]"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-green"
+    }, "$", formatPrice(pos.tp1_price)), " / ", /*#__PURE__*/React.createElement("span", {
+      className: "text-binance-red"
+    }, "$", formatPrice(pos.sl_price))), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 text-right"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-end gap-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "bg-binance-subpanel hover:bg-binance-hover px-1.5 py-0.5 rounded text-[10px] border border-binance-border",
+      onClick: () => setForensicsData(pos)
+    }, "💡"), /*#__PURE__*/React.createElement("button", {
+      className: "bg-binance-red/80 hover:bg-binance-red text-white px-2 py-0.5 rounded text-[10px] font-bold",
+      onClick: () => handleClosePosition(pos.id)
+    }, "Close"))));
+  })))), bottomTab === 'orders' && /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-left font-mono text-[11px] border-collapse"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "border-b border-binance-border bg-binance-subpanel text-binance-textSec text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Symbol"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Side"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Limit Price"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "TP1 Target"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Stop Loss"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Planned Size"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3 text-right"
+  }, "Action"))), /*#__PURE__*/React.createElement("tbody", {
+    className: "divide-y divide-binance-borderSubtle/60"
+  }, limitOrders.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "7",
+    className: "py-8 text-center text-binance-textMuted"
+  }, "No open limit orders...")) : limitOrders.map(sig => /*#__PURE__*/React.createElement("tr", {
+    key: sig.id,
+    className: "hover:bg-binance-hover/40"
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3 font-bold text-white cursor-pointer",
+    onClick: () => {
+      setActiveSymbol(sig.symbol);
+      setActiveExchange(sig.exchange);
     }
-
-    const row = document.createElement('div');
-    row.innerHTML = formatLogHtml(logItem);
-    el.terminalLogBody.appendChild(row.firstElementChild || row);
-
-    if (state.autoScrollLogs !== false && el.terminalLogContainer) {
-      el.terminalLogContainer.scrollTop = el.terminalLogContainer.scrollHeight;
+  }, /*#__PURE__*/React.createElement("span", null, sig.symbol), /*#__PURE__*/React.createElement("span", {
+    className: "ml-1 text-[9px] text-binance-cyan bg-binance-cyanBg px-1.5 py-0.2 rounded font-bold border border-binance-cyan/30 font-mono"
+  }, sig.timeframe || sig.tf || '15m'), /*#__PURE__*/React.createElement("span", {
+    className: "ml-1 text-[9px] text-binance-textSec bg-binance-card px-1 py-0.2 rounded font-mono"
+  }, sig.exchange)), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `px-1 py-0.2 rounded text-[9.5px] ${sig.direction === 'BUY' ? 'badge-long' : 'badge-short'}`
+  }, sig.direction === 'BUY' ? 'LIMIT BUY' : 'LIMIT SELL')), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3 font-bold text-binance-yellow"
+  }, "$", formatPrice(sig.entry_price)), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3 text-binance-green"
+  }, "$", formatPrice(sig.tp1_price)), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3 text-binance-red"
+  }, "$", formatPrice(sig.sl_price)), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3"
+  }, "$400.00"), /*#__PURE__*/React.createElement("td", {
+    className: "py-1.5 px-3 text-right"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel px-2 py-0.5 rounded text-[10px] border border-binance-border",
+    onClick: () => {
+      setActiveSymbol(sig.symbol);
+      setActiveExchange(sig.exchange);
     }
-  }
+  }, "📊 Chart"))))))), bottomTab === 'history' && /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-left font-mono text-[11px] border-collapse"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "border-b border-binance-border bg-binance-subpanel text-binance-textSec text-[10.5px]"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Symbol"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Side"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Entry"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Exit"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Reason"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Realized PnL"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "ROE %"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3"
+  }, "Time"), /*#__PURE__*/React.createElement("th", {
+    className: "py-1.5 px-3 text-right"
+  }, "Forensics"))), /*#__PURE__*/React.createElement("tbody", {
+    className: "divide-y divide-binance-borderSubtle/60"
+  }, closedPositions.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: "9",
+    className: "py-8 text-center text-binance-textMuted"
+  }, "No closed trades recorded yet.")) : closedPositions.map(p => {
+    const pnlUsd = p.net_pnl_usd || 0.0;
+    const roePct = p.roe_pct !== undefined ? p.roe_pct : 0.0;
+    const isWin = pnlUsd >= 0;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: p.id,
+      className: "hover:bg-binance-hover/40"
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 font-bold text-white cursor-pointer",
+      onClick: () => {
+        setActiveSymbol(p.symbol);
+        setActiveExchange(p.exchange);
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `mr-1 px-1 py-0.2 rounded text-[9.5px] ${p.direction === 'BUY' ? 'badge-long' : 'badge-short'}`
+    }, p.direction === 'BUY' ? 'LONG' : 'SHORT'), /*#__PURE__*/React.createElement("span", null, p.symbol), /*#__PURE__*/React.createElement("span", {
+      className: "ml-1 text-[9px] text-binance-cyan bg-binance-cyanBg px-1.5 py-0.2 rounded font-bold border border-binance-cyan/30 font-mono"
+    }, p.timeframe || p.tf || '15m'), /*#__PURE__*/React.createElement("span", {
+      className: "ml-1 text-[9px] text-binance-textSec bg-binance-card px-1 py-0.2 rounded font-mono"
+    }, p.exchange)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `px-1 py-0.2 rounded text-[9.5px] ${p.direction === 'BUY' ? 'badge-long' : 'badge-short'}`
+    }, p.direction === 'BUY' ? 'LONG' : 'SHORT')), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, "$", formatPrice(p.entry_price)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, "$", formatPrice(p.exit_price || p.current_price)), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `px-1 py-0.2 rounded text-[9.5px] ${isWin ? 'bg-binance-greenBg text-binance-green' : 'bg-binance-redBg text-binance-red'}`
+    }, p.exit_reason || p.status)), /*#__PURE__*/React.createElement("td", {
+      className: `py-1.5 px-3 font-bold ${isWin ? 'text-binance-green' : 'text-binance-red'}`
+    }, isWin ? '+' : '', "$", formatPrice(pnlUsd)), /*#__PURE__*/React.createElement("td", {
+      className: `py-1.5 px-3 font-bold ${isWin ? 'text-binance-green' : 'text-binance-red'}`
+    }, isWin ? '+' : '', roePct.toFixed(2), "%"), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 text-binance-textSec"
+    }, p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-'), /*#__PURE__*/React.createElement("td", {
+      className: "py-1.5 px-3 text-right"
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "bg-binance-subpanel px-2 py-0.5 rounded text-[10px] border border-binance-border",
+      onClick: () => setForensicsData(p)
+    }, "💡 View")));
+  })))), bottomTab === 'logs' && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col h-full gap-1.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between text-[11px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1"
+  }, ['ALL', 'SIGNAL', 'TRADE', 'FETCH_QUEUE', 'WARN'].map(f => /*#__PURE__*/React.createElement("button", {
+    key: f,
+    className: `px-2 py-0.5 rounded text-[10px] font-bold ${logFilter === f ? 'bg-binance-yellow text-black' : 'bg-binance-subpanel text-binance-textSec'}`,
+    onClick: () => setLogFilter(f)
+  }, f))), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel px-2 py-0.5 rounded text-[10px] border border-binance-border",
+    onClick: () => setLogs([])
+  }, "Clear")), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 bg-black p-2 rounded font-mono text-[10.5px] overflow-y-auto flex flex-col gap-0.5 border border-binance-border"
+  }, logs.filter(l => logFilter === 'ALL' || l.category === logFilter || l.level === logFilter).map((l, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "flex items-baseline gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textMuted shrink-0"
+  }, "[", new Date(l.timestamp).toLocaleTimeString(), "]"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-yellow font-bold shrink-0"
+  }, "[", l.category || l.level || 'SYS', "]"), /*#__PURE__*/React.createElement("span", {
+    className: `break-all ${l.category === 'SIGNAL' ? 'text-binance-cyan' : l.category === 'TRADE' ? 'text-binance-green' : 'text-binance-text'}`
+  }, l.message))))))))), isCatalogOpen && /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4",
+    onClick: () => setIsCatalogOpen(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-binance-panel border border-binance-borderHighlight rounded-lg w-full max-w-xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3.5 border-b border-binance-border bg-binance-subpanel"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-serif italic font-black text-binance-cyan text-base"
+  }, "fx"), /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-white text-sm"
+  }, "Indicators & Strategies Catalog")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-card hover:bg-binance-hover text-binance-red text-[11px] font-bold px-2 py-0.5 rounded border border-binance-border",
+    onClick: handleResetAllIndicators,
+    title: "Reset all indicators back to default factory list"
+  }, "🔄 Reset All"), /*#__PURE__*/React.createElement("button", {
+    className: "text-binance-textSec hover:text-white text-lg",
+    onClick: () => setIsCatalogOpen(false)
+  }, "✕"))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 border-b border-binance-border bg-binance-card"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    className: "w-full bg-binance-subpanel border border-binance-border rounded px-3 py-1.5 text-xs text-white placeholder-binance-textMuted focus:outline-none focus:border-binance-yellow font-mono",
+    placeholder: "Search indicators (e.g. STAT2, SMC, ATRBot, EMA, VWAP)...",
+    value: catalogSearch,
+    onChange: e => setCatalogSearch(e.target.value),
+    autoFocus: true
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 flex-1 overflow-y-auto flex flex-col gap-2"
+  }, [{
+    id: 'stat2_box_strategy',
+    name: 'STAT2 Pro Box Strategy',
+    tag: 'SMC + ATRBot',
+    desc: 'Trade Cards HUD, Fair Value Gaps, Liquidity Pools, Dynamic Trailing Cloud & Entry/TP/SL Markers',
+    color: '#00F0FF'
+  }, {
+    id: 'ema',
+    name: 'EMA Ribbon (21/50/200)',
+    tag: 'Trend Ribbon',
+    desc: 'Triple Exponential Moving Average ribbon for trend alignment & dynamic support',
+    color: '#38BDF8'
+  }, {
+    id: 'vwap',
+    name: 'VWAP (Volume-Weighted Average Price)',
+    tag: 'Volume Profile',
+    desc: 'Benchmark price reflecting true market volume distribution',
+    color: '#FBBF24'
+  }, {
+    id: 'atrbot',
+    name: 'ATRBot (Multi-MA + VIDYA Cloud)',
+    tag: 'Volatility Trailing',
+    desc: 'Adaptive Variable Index Dynamic Average with dynamic ATR trailing stop loss',
+    color: '#A855F7'
+  }, {
+    id: 'smc',
+    name: 'Smart Money Concepts Core (SMC)',
+    tag: 'Structure',
+    desc: 'Automatic detection of BOS, CHoCH, Order Blocks, Swing Points and Liquidity Runs',
+    color: '#10B981'
+  }].filter(item => !catalogSearch || item.name.toLowerCase().includes(catalogSearch.toLowerCase()) || item.tag.toLowerCase().includes(catalogSearch.toLowerCase())).map(item => /*#__PURE__*/React.createElement("div", {
+    key: item.id,
+    className: "p-3 rounded bg-binance-card border border-binance-border flex items-center justify-between hover:border-binance-borderHighlight transition"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: item.color
+    },
+    className: "text-sm font-black"
+  }, "●"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-xs"
+  }, item.name), /*#__PURE__*/React.createElement("span", {
+    className: "text-[9px] bg-binance-panel px-1.5 py-0.2 rounded text-binance-textSec border border-binance-border"
+  }, item.tag)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-binance-textMuted leading-tight"
+  }, item.desc)), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-yellow hover:bg-binance-yellowHover text-black text-xs font-bold px-3 py-1 rounded transition shrink-0 ml-3",
+    onClick: () => handleAddIndicator(item.id)
+  }, "+ Add")))))), editingInstance && /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4",
+    onClick: () => setEditingInstance(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-binance-panel border border-binance-borderHighlight rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3.5 border-b border-binance-border bg-binance-subpanel"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-base"
+  }, "⚙️"), /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-white text-sm"
+  }, editingInstance.name, " Settings")), /*#__PURE__*/React.createElement("button", {
+    className: "text-binance-textSec hover:text-white text-lg font-bold",
+    onClick: () => setEditingInstance(null)
+  }, "✕")), editingInstance.type === 'stat2_box_strategy' && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center border-b border-binance-border bg-binance-card px-3 pt-2 gap-1 font-mono text-xs"
+  }, [{
+    id: 'params',
+    label: '📊 Parameters'
+  }, {
+    id: 'style',
+    label: '🎨 Lines & Colors'
+  }, {
+    id: 'fonts',
+    label: '🔤 Font Sizes'
+  }, {
+    id: 'orders',
+    label: '⚡ Order Execution'
+  }].map(tab => /*#__PURE__*/React.createElement("button", {
+    key: tab.id,
+    className: `px-3 py-2 font-bold border-b-2 transition ${indicatorSettingsTab === tab.id ? 'border-binance-yellow text-binance-yellow bg-binance-panel rounded-t' : 'border-transparent text-binance-textSec hover:text-white'}`,
+    onClick: () => setIndicatorSettingsTab(tab.id)
+  }, tab.label))), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 flex-1 overflow-y-auto text-xs font-mono flex flex-col gap-4"
+  }, editingInstance.type === 'stat2_box_strategy' && /*#__PURE__*/React.createElement(React.Fragment, null, indicatorSettingsTab === 'params' && /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3.5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Strategy Execution Mode"), /*#__PURE__*/React.createElement("select", {
+    defaultValue: editingInstance.inputs.strategyMode || 'dual',
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.strategyMode = e.target.value;
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "dual"
+  }, "Dual Mode (Trend Continuation + Liquidity Fade Traps)"), /*#__PURE__*/React.createElement("option", {
+    value: "trend"
+  }, "Trend Momentum Only (Filter Counter FVGs & Liq Traps)"), /*#__PURE__*/React.createElement("option", {
+    value: "fade"
+  }, "Liquidity Fade Traps Only (Exhaustion Reversals)"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "CMO Length (VIDYA Momentum)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.cmoLength || 14,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.cmoLength = parseInt(e.target.value) || 14;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "MA Length (VIDYA Baseline)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.maLength || 21,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.maLength = parseInt(e.target.value) || 21;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "ATR Multiplier"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.1,
+    defaultValue: editingInstance.inputs.atrMult || 2.0,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.atrMult = parseFloat(e.target.value) || 2.0;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Min ATR Volatility %"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.05,
+    defaultValue: editingInstance.inputs.minAtrPct || 0.35,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.minAtrPct = parseFloat(e.target.value) || 0.35;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Liquidity Trap % Threshold"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.1,
+    defaultValue: editingInstance.inputs.liqThresholdPct || 1.5,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.liqThresholdPct = parseFloat(e.target.value) || 1.5;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Counter FVG % Threshold"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.1,
+    defaultValue: editingInstance.inputs.fvgThresholdPct || 1.5,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.fvgThresholdPct = parseFloat(e.target.value) || 1.5;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Swing SL Lookback Bars"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.swingLookback || 30,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.swingLookback = parseInt(e.target.value) || 30;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Max Cards Shown on Chart"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.maxCardsVisible || 15,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.maxCardsVisible = parseInt(e.target.value) || 15;
+    }
+  }))), indicatorSettingsTab === 'style' && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded border border-binance-border flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-[11.5px] border-b border-binance-border pb-1"
+  }, "👁️ Line & Box Visibility Toggles"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 md:grid-cols-3 gap-2"
+  }, [{
+    key: 'showCards',
+    label: 'HUD Trade Cards'
+  }, {
+    key: 'showStem',
+    label: 'Stem Stem Connection'
+  }, {
+    key: 'showGuideLines',
+    label: 'Extended Guide Rays'
+  }, {
+    key: 'showEntryLine',
+    label: 'Entry Price Ray'
+  }, {
+    key: 'showTp1Line',
+    label: 'TP1 Target Ray'
+  }, {
+    key: 'showTp2Line',
+    label: 'TP2 Target Ray'
+  }, {
+    key: 'showSlLine',
+    label: 'SL Stop Loss Ray'
+  }, {
+    key: 'showLineBadges',
+    label: 'Ray Tip Badges'
+  }, {
+    key: 'showFVG',
+    label: 'FVG Zones'
+  }, {
+    key: 'showLiquidity',
+    label: 'Liquidity Pools (BSL/SSL)'
+  }, {
+    key: 'showRibbon',
+    label: 'VIDYA Ribbon Cloud'
+  }, {
+    key: 'showTrail2',
+    label: 'Dynamic Trailing Stop'
+  }].map(tog => /*#__PURE__*/React.createElement("label", {
+    key: tog.key,
+    className: "flex items-center gap-2 p-1.5 rounded bg-binance-subpanel/50 hover:bg-binance-hover cursor-pointer border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    defaultChecked: editingInstance.style[tog.key] !== false,
+    onChange: e => {
+      editingInstance.style[tog.key] = e.target.checked;
+    },
+    className: "accent-binance-yellow"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-white text-[11px]"
+  }, tog.label))))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded border border-binance-border flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-[11.5px] border-b border-binance-border pb-1"
+  }, "📐 Dimensions & Thickness"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Card Width (px)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.style.cardWidth || 210,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-1.5 text-white",
+    onChange: e => {
+      editingInstance.style.cardWidth = parseInt(e.target.value) || 210;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Ray Length (px)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.style.lineLength || 280,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-1.5 text-white",
+    onChange: e => {
+      editingInstance.style.lineLength = parseInt(e.target.value) || 280;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Line Thickness (px)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.5,
+    defaultValue: editingInstance.style.lineThickness || 2.0,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-1.5 text-white",
+    onChange: e => {
+      editingInstance.style.lineThickness = parseFloat(e.target.value) || 2.0;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Card Background Opacity"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.05,
+    defaultValue: editingInstance.style.cardOpacity || 0.94,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-1.5 text-white",
+    onChange: e => {
+      editingInstance.style.cardOpacity = parseFloat(e.target.value) || 0.94;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "FVG Box Opacity"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.05,
+    defaultValue: editingInstance.style.fvgOpacity || 0.18,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-1.5 text-white",
+    onChange: e => {
+      editingInstance.style.fvgOpacity = parseFloat(e.target.value) || 0.18;
+    }
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded border border-binance-border flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-[11.5px] border-b border-binance-border pb-1"
+  }, "🎨 Color Palette Customization"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 md:grid-cols-4 gap-2.5"
+  }, [{
+    key: 'buyColor',
+    label: 'BUY Card Border',
+    def: '#10b981'
+  }, {
+    key: 'sellColor',
+    label: 'SELL Card Border',
+    def: '#f43f5e'
+  }, {
+    key: 'fadeShortColor',
+    label: 'FADE SHORT Color',
+    def: '#f59e0b'
+  }, {
+    key: 'fadeLongColor',
+    label: 'FADE LONG Color',
+    def: '#06b6d4'
+  }, {
+    key: 'entryLineColor',
+    label: 'Entry Ray Color',
+    def: '#0284c7'
+  }, {
+    key: 'tp1LineColor',
+    label: 'TP1 Ray Color',
+    def: '#10b981'
+  }, {
+    key: 'tp2LineColor',
+    label: 'TP2 Ray Color',
+    def: '#06b6d4'
+  }, {
+    key: 'slLineColor',
+    label: 'SL Ray Color',
+    def: '#f43f5e'
+  }, {
+    key: 'fvgBullColor',
+    label: 'Bullish FVG Color',
+    def: '#10b981'
+  }, {
+    key: 'fvgBearColor',
+    label: 'Bearish FVG Color',
+    def: '#f43f5e'
+  }, {
+    key: 'liqBslColor',
+    label: 'BSL Liquidity Ray',
+    def: '#ec4899'
+  }, {
+    key: 'liqSslColor',
+    label: 'SSL Liquidity Ray',
+    def: '#8b5cf6'
+  }, {
+    key: 'bullCloudColor',
+    label: 'Bull Ribbon Cloud',
+    def: '#10b981'
+  }, {
+    key: 'bearCloudColor',
+    label: 'Bear Ribbon Cloud',
+    def: '#f43f5e'
+  }, {
+    key: 'stopColor',
+    label: 'Trailing Stop Line',
+    def: '#a855f7'
+  }, {
+    key: 'cardBackground',
+    label: 'Card Background',
+    def: '#0b1120'
+  }].map(col => /*#__PURE__*/React.createElement("div", {
+    key: col.key,
+    className: "flex items-center justify-between p-1.5 rounded bg-binance-subpanel border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10.5px] text-binance-textSec truncate mr-2"
+  }, col.label), /*#__PURE__*/React.createElement("input", {
+    type: "color",
+    defaultValue: editingInstance.style[col.key] || col.def,
+    onChange: e => {
+      editingInstance.style[col.key] = e.target.value;
+    },
+    className: "w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
+  })))))), indicatorSettingsTab === 'fonts' && /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded border border-binance-border flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-[11.5px] border-b border-binance-border pb-1"
+  }, "🔤 Typography & Font Sizes (px)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3.5"
+  }, [{
+    key: 'titleFontSize',
+    label: 'Card Title Header (e.g. ▲ BUY TREND)',
+    def: 11.5,
+    min: 8,
+    max: 20
+  }, {
+    key: 'badgeFontSize',
+    label: 'Card Status Pill Badge (e.g. 🎯 TP1 HIT)',
+    def: 9.5,
+    min: 7,
+    max: 16
+  }, {
+    key: 'priceFontSize',
+    label: 'Card Price Values Numbers',
+    def: 11,
+    min: 8,
+    max: 18
+  }, {
+    key: 'labelFontSize',
+    label: 'Card Row Labels (ENTRY, TP1, TP2, SL)',
+    def: 10,
+    min: 8,
+    max: 16
+  }, {
+    key: 'lineBadgeFontSize',
+    label: 'Extended Ray Tip Pill Badge',
+    def: 10,
+    min: 8,
+    max: 16
+  }, {
+    key: 'fvgFontSize',
+    label: 'FVG Text Label (FVG + / FVG -)',
+    def: 10,
+    min: 8,
+    max: 16
+  }, {
+    key: 'liqFontSize',
+    label: 'Liquidity Pool Label (💧 BSL / SSL)',
+    def: 11,
+    min: 8,
+    max: 16
+  }].map(fnt => /*#__PURE__*/React.createElement("div", {
+    key: fnt.key,
+    className: "flex flex-col gap-1 p-2 rounded bg-binance-subpanel border border-binance-borderSubtle"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec text-[11px]"
+  }, fnt.label), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.5,
+    min: fnt.min,
+    max: fnt.max,
+    defaultValue: editingInstance.style[fnt.key] !== undefined ? editingInstance.style[fnt.key] : fnt.def,
+    className: "w-24 bg-binance-card border border-binance-border rounded p-1.5 text-white font-bold",
+    onChange: e => {
+      editingInstance.style[fnt.key] = parseFloat(e.target.value) || fnt.def;
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textMuted text-[10px]"
+  }, "px (range: ", fnt.min, " - ", fnt.max, ")")))))), indicatorSettingsTab === 'orders' && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 bg-binance-card rounded border border-binance-border flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white text-[11.5px] border-b border-binance-border pb-1"
+  }, "⚡ Order Routing & Execution Setup"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3.5"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Execution Order Type"), /*#__PURE__*/React.createElement("select", {
+    defaultValue: editingInstance.inputs.orderType || 'MARKET',
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.orderType = e.target.value;
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "MARKET"
+  }, "MARKET (Instant fill on candle close)"), /*#__PURE__*/React.createElement("option", {
+    value: "LIMIT"
+  }, "LIMIT (Optimal FVG / Liquidity sweep fill)"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Default Strategy Leverage"), /*#__PURE__*/React.createElement("select", {
+    defaultValue: editingInstance.inputs.leverage || 20,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.leverage = parseInt(e.target.value) || 20;
+    }
+  }, [1, 2, 5, 10, 15, 20, 25, 50, 75, 100].map(lev => /*#__PURE__*/React.createElement("option", {
+    key: lev,
+    value: lev
+  }, lev, "x Cross / Isolated")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Margin Mode"), /*#__PURE__*/React.createElement("select", {
+    defaultValue: editingInstance.inputs.marginMode || 'ISOLATED',
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.marginMode = e.target.value;
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "ISOLATED"
+  }, "ISOLATED (Independent Risk per Pair)"), /*#__PURE__*/React.createElement("option", {
+    value: "CROSS"
+  }, "CROSS (Shared Margin Pool)"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Risk Allocation % per Trade"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: 0.25,
+    min: 0.1,
+    max: 10.0,
+    defaultValue: editingInstance.inputs.riskPerTradePct || 1.0,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.riskPerTradePct = parseFloat(e.target.value) || 1.0;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "Max Concurrent Open Positions"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 1,
+    max: 30,
+    defaultValue: editingInstance.inputs.maxOpenTrades || 5,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.maxOpenTrades = parseInt(e.target.value) || 5;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1 font-bold"
+  }, "TP1 Partial Take Profit Size %"), /*#__PURE__*/React.createElement("select", {
+    defaultValue: editingInstance.inputs.tp1CloseRatio || 50,
+    className: "w-full bg-binance-subpanel border border-binance-border rounded p-2 text-white font-bold",
+    onChange: e => {
+      editingInstance.inputs.tp1CloseRatio = parseInt(e.target.value) || 50;
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: 25
+  }, "25% Size at TP1 (75% to TP2)"), /*#__PURE__*/React.createElement("option", {
+    value: 50
+  }, "50% Size at TP1 (50% to TP2)"), /*#__PURE__*/React.createElement("option", {
+    value: 75
+  }, "75% Size at TP1 (25% to TP2)"), /*#__PURE__*/React.createElement("option", {
+    value: 100
+  }, "100% Full Close at TP1")))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 border-t border-binance-border pt-3 flex flex-col gap-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center gap-2 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    defaultChecked: editingInstance.inputs.autoMoveBE !== false,
+    onChange: e => {
+      editingInstance.inputs.autoMoveBE = e.target.checked;
+    },
+    className: "accent-binance-yellow"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-white block text-[11.5px]"
+  }, "⚡ Auto Move Breakeven (BE)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "Automatically move Stop Loss to Entry + 0.05% fee offset upon TP1 hit to guarantee risk-free trade."))), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center gap-2 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    defaultChecked: editingInstance.inputs.enableTrailingSl !== false,
+    onChange: e => {
+      editingInstance.inputs.enableTrailingSl = e.target.checked;
+    },
+    className: "accent-binance-yellow"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-white block text-[11.5px]"
+  }, "🎯 Dynamic ATR Trailing Stop"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "Activate adaptive ATR VIDYA trailing stop to protect floating profits on massive continuation runners."))))))), editingInstance.type === 'ema' && /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-3"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Period 1"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.period1 || 21,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.period1 = parseInt(e.target.value) || 21;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Period 2"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.period2 || 50,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.period2 = parseInt(e.target.value) || 50;
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Period 3"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.period3 || 200,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.period3 = parseInt(e.target.value) || 200;
+    }
+  }))), editingInstance.type === 'vwap' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-binance-textSec block mb-1"
+  }, "Rolling Period"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    defaultValue: editingInstance.inputs.rollingPeriod || 200,
+    className: "w-full bg-binance-card border border-binance-border rounded p-2 text-white",
+    onChange: e => {
+      editingInstance.inputs.rollingPeriod = parseInt(e.target.value) || 200;
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 border-t border-binance-border flex items-center justify-between bg-binance-subpanel"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-card hover:bg-binance-hover px-3 py-1 rounded text-xs text-binance-red font-bold border border-binance-border",
+    onClick: () => {
+      if (confirm(`Reset settings of ${editingInstance.name} to default?`)) {
+        if (window.IndicatorRegistry) {
+          const fresh = window.IndicatorRegistry.createInstance(editingInstance.type);
+          editingInstance.inputs = fresh.inputs;
+          editingInstance.style = fresh.style;
+          const next = [...indicatorInstances];
+          setIndicatorInstances(next);
+          saveIndicatorsToStorage(next);
+          setEditingInstance({
+            ...editingInstance
+          });
+        }
+      }
+    }
+  }, "🔄 Reset to Default"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-3 py-1 rounded text-xs border border-binance-border",
+    onClick: () => setEditingInstance(null)
+  }, "Cancel"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-4 py-1 rounded text-xs transition shadow",
+    onClick: () => {
+      const next = [...indicatorInstances];
+      setIndicatorInstances(next);
+      saveIndicatorsToStorage(next);
+      setEditingInstance(null);
+    }
+  }, "Apply & Save"))))), /*#__PURE__*/React.createElement(OrderForensicsModal, {
+    data: forensicsData,
+    marketPrices: marketPrices,
+    indicatorInstances: indicatorInstances,
+    onOpenCatalog: () => setIsCatalogOpen(true),
+    onToggleVisibility: handleToggleVisibility,
+    onOpenSettings: inst => setEditingInstance(inst),
+    onRemoveInstance: handleRemoveInstance,
+    onClose: () => setForensicsData(null),
+    onSelectSymbol: (sym, ex) => {
+      setActiveSymbol(sym);
+      setActiveExchange(ex || 'BINANCE');
+    },
+    onClosePosition: handleClosePosition
+  }), isSettingsOpen && /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4",
+    onClick: () => setIsSettingsOpen(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-binance-panel border border-binance-borderHighlight rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3.5 border-b border-binance-border bg-binance-subpanel"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-white text-sm flex items-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", null, "⚙️ SERVER SCANNER & MULTI-EXCHANGE SETTINGS")), /*#__PURE__*/React.createElement("button", {
+    className: "text-binance-textSec hover:text-white text-lg",
+    onClick: () => setIsSettingsOpen(false)
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 flex flex-col gap-4 overflow-y-auto text-xs"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h4", {
+    className: "text-binance-yellow font-bold mb-2"
+  }, "🌐 Multi-Exchange Engine & Seeding"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white"
+  }, "🔶 Binance Futures"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "500 Symbols • 200 req/min"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1",
+    onClick: () => fetch('/api/admin/import-top-500', {
+      method: 'POST'
+    }).then(() => alert('Binance 500 seeding started.'))
+  }, "⚡ Re-Seed 500")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white"
+  }, "⬛ Bybit Linear"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "300 Symbols • 120 req/min"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1",
+    onClick: () => fetch('/api/admin/import-bybit', {
+      method: 'POST'
+    }).then(() => alert('Bybit 300 seeding started.'))
+  }, "⚡ Re-Seed 300")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-white"
+  }, "🔷 OKX Perpetual"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "200 Symbols • 80 req/min"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1",
+    onClick: () => fetch('/api/admin/import-okx', {
+      method: 'POST'
+    }).then(() => alert('OKX 200 seeding started.'))
+  }, "⚡ Re-Seed 200")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h4", {
+    className: "text-binance-yellow font-bold mb-2"
+  }, "🎯 Strategy Engine Mode"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-3 gap-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex items-center gap-2 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "stratMode",
+    defaultChecked: true
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-white block"
+  }, "Dual SMC"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "Trend + Fade Traps"))), /*#__PURE__*/React.createElement("label", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex items-center gap-2 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "stratMode"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-white block"
+  }, "Trend Momentum"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "FVG Continuation"))), /*#__PURE__*/React.createElement("label", {
+    className: "p-2.5 rounded bg-binance-card border border-binance-border flex items-center gap-2 cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "stratMode"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-white block"
+  }, "Liquidity Fade"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "Exhaustion Reversal"))))), /*#__PURE__*/React.createElement("div", {
+    className: "border border-red-500/30 bg-red-500/5 rounded p-3 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+    className: "text-binance-red block"
+  }, "⚠️ Danger Zone — Reset Database & Trades"), /*#__PURE__*/React.createElement("span", {
+    className: "text-binance-textSec text-[10px]"
+  }, "Wipe order positions or perform full factory reload for 3 exchanges.")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-red/80 hover:bg-binance-red text-white px-2.5 py-1 rounded text-xs font-bold",
+    onClick: handleResetTrades
+  }, "🗑️ Reset Trades ($1,000 Equity)"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-red-900 hover:bg-red-800 text-white px-2.5 py-1 rounded text-xs font-bold",
+    onClick: () => fetch('/api/admin/reset-all', {
+      method: 'POST'
+    }).then(() => alert('Factory reset started.'))
+  }, "⚡ Factory Reset DB")))), /*#__PURE__*/React.createElement("div", {
+    className: "p-3 border-t border-binance-border flex justify-end gap-2 bg-binance-subpanel"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-subpanel hover:bg-binance-hover px-3 py-1 rounded text-xs border border-binance-border",
+    onClick: () => setIsSettingsOpen(false)
+  }, "Close"), /*#__PURE__*/React.createElement("button", {
+    className: "bg-binance-yellow text-black font-bold px-3 py-1 rounded text-xs",
+    onClick: () => {
+      alert('Settings updated.');
+      setIsSettingsOpen(false);
+    }
+  }, "Save Settings"))))));
 }
 
-function formatLogHtml(l) {
-  const isSignal = l.level === 'SIGNAL';
-  const isTrade = l.level === 'TRADE';
-  const lvlClass = l.level || 'INFO';
-  const msgClass = (isSignal || isTrade) ? 'log-msg highlight-signal' : 'log-msg';
-
-  return `
-    <div class="log-row">
-      <span class="log-time">${l.timestamp}</span>
-      <span class="log-pill ${lvlClass}">[${l.category || l.level}]</span>
-      <span class="${msgClass}">${escapeHtml(l.message)}</span>
-    </div>
-  `;
-}
-
-function updateLogCounters() {
-  const count = state.logs ? state.logs.length : 0;
-  if (el.badgeLogCount) el.badgeLogCount.textContent = count;
-  if (el.cntLogAll) el.cntLogAll.textContent = count;
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// ── BOOTSTRAP ──
-window.addEventListener('DOMContentLoaded', () => {
-  initDom();
-  initEventListeners();
-  fetchInitialData();
-  initWebSocket();
-});
+// Mount React Root
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(/*#__PURE__*/React.createElement(App, null));

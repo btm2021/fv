@@ -4,8 +4,18 @@ const logger = require('./logger');
 class NotificationDispatcher {
   constructor() {
     this.wsClients = new Set();
+    this.wss = null;
     // Connect logger to WebSocket broadcaster
     logger.setBroadcaster((type, payload) => this.broadcast(type, payload));
+  }
+
+  init(server) {
+    if (this.wss) return;
+    const { WebSocketServer } = require('ws');
+    this.wss = new WebSocketServer({ server });
+    this.wss.on('connection', (ws) => {
+      this.registerWsClient(ws);
+    });
   }
 
   registerWsClient(ws) {

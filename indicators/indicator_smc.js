@@ -44,17 +44,18 @@
     },
 
     calculate: function (candles, inputs) {
-      if (!SMC) return {};
+      const smcEngine = SMC || (typeof window !== 'undefined' ? (window.SMC || window.SmartMoneyConcepts) : null) || (typeof globalThis !== 'undefined' ? (globalThis.SMC || globalThis.SmartMoneyConcepts) : null);
+      if (!smcEngine || typeof smcEngine.swingHighsLows !== 'function') return {};
       const swingLen = parseInt(inputs.swingLength, 10) || 20;
       const closeBreak = inputs.closeBreak === 'true' || inputs.closeBreak === true;
       const unmitOnly = inputs.unmitigatedOnly === 'true' || inputs.unmitigatedOnly === true;
       const rangePct = (parseFloat(inputs.rangePercent) || 1.0) / 100;
 
-      const swings = SMC.swingHighsLows(candles, swingLen);
-      const fvg = SMC.fvg(candles, unmitOnly);
-      const bos = SMC.bosChoch(candles, swings, closeBreak);
-      const ob = SMC.ob(candles, swings, unmitOnly);
-      const liq = SMC.liquidity(candles, swings, rangePct);
+      const swings = smcEngine.swingHighsLows(candles, swingLen);
+      const fvg = smcEngine.fvg(candles, unmitOnly);
+      const bos = smcEngine.bosChoch(candles, swings, closeBreak);
+      const ob = smcEngine.ob(candles, swings, unmitOnly);
+      const liq = smcEngine.liquidity(candles, swings, rangePct);
 
       return { swings, fvg, bos, ob, liq };
     },

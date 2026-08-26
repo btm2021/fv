@@ -26,6 +26,7 @@
   "license": "MIT",
   "dependencies": {
     "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
     "express": "^5.2.1",
     "sql.js": "^1.14.2",
     "sqlite3": "^6.0.1",

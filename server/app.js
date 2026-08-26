@@ -1,55 +1,44 @@
+/**
+ * Express REST API & WebSocket Server
+ * Standardized Multi-Exchange Architecture (Binance, Bybit, OKX)
+ */
 const express = require('express');
 const http = require('http');
-const { WebSocketServer } = require('ws');
 const path = require('path');
+const cors = require('cors');
 
 const DB = require('./db');
-const binanceClient = require('./binanceClient');
 const scanner = require('./scanner');
 const notification = require('./notification');
+const exchangeManager = require('./exchanges');
+const Stat2Box = require('../indicators/indicator_stat2_box_strategy');
 const logger = require('./logger');
-const Stat2Box = require('../indicators/indicator_stat2_box_strategy.js');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
+// Initialize WebSocket stream and connect exchange feeds
+notification.init(server);
+exchangeManager.connectAllWebSockets();
+
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
-
-// Serve indicator and SMC scripts statically so the frontend can reuse the exact same engine
 app.use('/indicators', express.static(path.join(__dirname, '..', 'indicators')));
+app.use('/libs', express.static(path.join(__dirname, '..', 'libs')));
 app.get('/smc.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'smc.js')));
-
-// WebSocket connection handler
-wss.on('connection', async (ws) => {
-  notification.registerWsClient(ws);
-  try {
-    // Send initial snapshot
-    ws.send(JSON.stringify({
-      type: 'INITIAL_SNAPSHOT',
-      data: {
-        status: await scanner.getStatus(),
-        signals: await DB.getSignals(30),
-        positions: await DB.getActivePositions(),
-        performance: await DB.getPerformanceStats(),
-        logs: logger.getLogs(80)
-      }
-    }));
-  } catch (err) {
-    console.error('WS Snapshot Error:', err);
-  }
-});
 
 // ── REST API ROUTES ──
 
-// 1. System & Scanner Status
+// 1. Health & Bot Status
 app.get('/api/status', async (req, res) => {
   try {
+    const exchange = req.query.exchange || null;
     res.json({
       success: true,
-      status: await scanner.getStatus(),
-      settings: await DB.getAllSettings()
+      status: scanner.getStatus(),
+      settings: await DB.getAllSettings(),
+      stats: await DB.getPerformanceStats(exchange)
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -57,8 +46,7 @@ app.get('/api/status', async (req, res) => {
 });
 
 app.post('/api/scanner/trigger', async (req, res) => {
-  scanner.executeScanCycle().catch(err => console.error(err));
-  res.json({ success: true, message: 'Scan cycle triggered asynchronously.' });
+  res.json({ success: true, message: 'Continuous scan wheels are active and pacing automatically.' });
 });
 
 app.post('/api/scanner/toggle', async (req, res) => {
@@ -66,37 +54,31 @@ app.post('/api/scanner/toggle', async (req, res) => {
     const current = (await DB.getSetting('is_scanner_active', '1')) === '1';
     const next = !current;
     await DB.setSetting('is_scanner_active', next ? '1' : '0');
+    if (next) scanner.start();
+    else scanner.stop();
     res.json({ success: true, is_scanner_active: next });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 2. Whitelist Symbol Entities
+// 2. Whitelist Symbol Entities (Multi-Exchange)
 app.get('/api/whitelist', async (req, res) => {
+  const exchange = req.query.exchange || null;
   try {
-    const symbols = await DB.getWhitelistSymbols();
-    const result = [];
-    for (const s of symbols) {
-      const strats = await DB.getStrategiesForSymbol(s.symbol);
-      const candles5m = await DB.getCandles(s.symbol, '5m', 1);
-      result.push({
-        ...s,
-        strategies: strats,
-        has_cached_candles: candles5m.length > 0
-      });
-    }
-    res.json({ success: true, data: result });
+    const symbols = await DB.getWhitelistSymbols(exchange);
+    res.json({ success: true, data: symbols });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.post('/api/whitelist', async (req, res) => {
-  const { symbol, category } = req.body;
+  const { symbol, category, exchange } = req.body;
   if (!symbol) return res.status(400).json({ success: false, error: 'Symbol is required' });
+  const ex = (exchange || 'BINANCE').toUpperCase();
   try {
-    const created = await DB.addWhitelistSymbol(symbol, category || 'Custom');
+    const created = await DB.addWhitelistSymbol(symbol, category || 'Custom', [], ex);
     res.json({ success: true, data: created });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -124,8 +106,9 @@ app.delete('/api/whitelist/:symbol', async (req, res) => {
 
 // 3. Multi-Strategy Manager per Symbol
 app.get('/api/strategies/:symbol', async (req, res) => {
+  const exchange = req.query.exchange || 'BINANCE';
   try {
-    const strats = await DB.getStrategiesForSymbol(req.params.symbol);
+    const strats = await DB.getStrategiesForSymbol(req.params.symbol, exchange);
     res.json({ success: true, data: strats });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -133,8 +116,17 @@ app.get('/api/strategies/:symbol', async (req, res) => {
 });
 
 app.post('/api/strategies', async (req, res) => {
+  const { symbol, strategy_name, strategy_type, timeframe, risk_pct, leverage, exchange } = req.body;
   try {
-    const stratId = await DB.saveStrategy(req.body);
+    const stratId = await DB.addStrategy(
+      symbol,
+      strategy_name || `${symbol} Strategy`,
+      strategy_type || 'dual',
+      timeframe || '5m',
+      risk_pct || 1.0,
+      leverage || 20,
+      exchange || 'BINANCE'
+    );
     res.json({ success: true, id: stratId });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -150,29 +142,51 @@ app.delete('/api/strategies/:id', async (req, res) => {
   }
 });
 
-// Admin: Import Top 500 Symbols (1,000 Strategies across 5m & 15m)
+// Admin: Import Top 500 Binance Symbols
 app.post('/api/admin/import-top-500', async (req, res) => {
   try {
     const importTop500 = require('../scripts/import_top_500_symbols');
-    // Run async in background
-    importTop500(true).catch(err => console.error('Background import top 500 error:', err));
+    importTop500(false).catch(err => console.error('Background import top 500 error:', err));
     res.json({ success: true, message: 'Top 500 Binance Futures (5m & 15m) import started in background.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Admin: Reset Trade Positions, Signals, and Equity to $1,000
-app.post('/api/admin/reset-trades', async (req, res) => {
+// Admin: Import Top 300 Bybit Symbols
+app.post('/api/admin/import-bybit', async (req, res) => {
   try {
-    await DB.resetTradesAndSignals();
-    logger.warn('ADMIN', '🗑️ User executed RESET: Cleared all trade positions, signals, and reset equity to $1,000.00 USD.');
+    const importBybit = require('../scripts/import_bybit_symbols');
+    importBybit(false).catch(err => console.error('Background import bybit error:', err));
+    res.json({ success: true, message: 'Top 300 Bybit Linear Perpetual import started in background.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin: Import Top 200 OKX Symbols
+app.post('/api/admin/import-okx', async (req, res) => {
+  try {
+    const importOkx = require('../scripts/import_okx_symbols');
+    importOkx(false).catch(err => console.error('Background import okx error:', err));
+    res.json({ success: true, message: 'Top 200 OKX USDT Swap Perpetual import started in background.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin: Reset Trade Positions & Signals
+app.post('/api/admin/reset-trades', async (req, res) => {
+  const exchange = req.query.exchange || null;
+  try {
+    await DB.resetTradesAndSignals(exchange);
+    logger.warn('ADMIN', `🗑️ User executed RESET: Cleared trade positions, signals, and reset equity for [${exchange || 'ALL'}].`);
     notification.broadcast('POSITIONS_UPDATE', {
       positions: [],
       stats: await DB.getPerformanceStats()
     });
     notification.broadcast('SIGNALS_UPDATE', { signals: [] });
-    res.json({ success: true, message: 'All trade positions and signals have been reset. Account balance reset to $1,000.00 USD.' });
+    res.json({ success: true, message: `Trade positions and signals reset for [${exchange || 'ALL'}].` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -183,35 +197,41 @@ app.post('/api/admin/reset-all', async (req, res) => {
   try {
     await DB.resetEntireDatabase();
     const importTop500 = require('../scripts/import_top_500_symbols');
+    const importBybit = require('../scripts/import_bybit_symbols');
+    const importOkx = require('../scripts/import_okx_symbols');
     importTop500(false).catch(e => console.error(e));
-    logger.warn('ADMIN', '⚠️ User executed FULL FACTORY RESET: Cleared DB tables and re-seeding Top 500 symbols.');
+    importBybit(false).catch(e => console.error(e));
+    importOkx(false).catch(e => console.error(e));
+    logger.warn('ADMIN', '⚠️ User executed FULL FACTORY RESET: Cleared DB tables and re-seeding Binance, Bybit & OKX.');
     notification.broadcast('POSITIONS_UPDATE', {
       positions: [],
       stats: await DB.getPerformanceStats()
     });
-    res.json({ success: true, message: 'Full database reset completed. Top 500 symbols re-seeding in background.' });
+    res.json({ success: true, message: 'Full database reset completed. Binance, Bybit & OKX symbols re-seeding in background.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 4. Signals & Alerts
+// 4. Signals & Alerts (Multi-Exchange)
 app.get('/api/signals', async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
+  const exchange = req.query.exchange || null;
   try {
-    const signals = await DB.getSignals(limit);
+    const signals = await DB.getSignals(limit, exchange);
     res.json({ success: true, data: signals });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 5. Trade Positions & Performance
+// 5. Trade Positions & Performance (Multi-Exchange)
 app.get('/api/positions', async (req, res) => {
+  const exchange = req.query.exchange || null;
   try {
-    const active = await DB.getActivePositions();
-    const all = await DB.getAllPositions(50);
-    const stats = await DB.getPerformanceStats();
+    const active = await DB.getActivePositions(exchange);
+    const all = await DB.getAllPositions(50, exchange);
+    const stats = await DB.getPerformanceStats(exchange);
     res.json({ success: true, active, all, stats });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -222,9 +242,8 @@ app.get('/api/positions', async (req, res) => {
 app.post('/api/positions/close/:id', async (req, res) => {
   try {
     const tradeExecutor = require('./tradeExecutor');
-    const binanceWs = require('./binanceWs');
-    const pos = await DB.get('SELECT symbol FROM trade_positions WHERE id = ?', [req.params.id]);
-    const livePrice = pos ? binanceWs.getLivePrice(pos.symbol) : null;
+    const pos = await DB.get('SELECT symbol, exchange FROM trade_positions WHERE id = ?', [req.params.id]);
+    const livePrice = pos ? exchangeManager.getLivePrice(pos.symbol, pos.exchange) : null;
     const result = await tradeExecutor.closePositionMarket(req.params.id, livePrice);
     
     notification.broadcast('POSITIONS_UPDATE', {
@@ -257,61 +276,24 @@ app.get('/api/positions/:id/forensics', async (req, res) => {
 
 // 5c. Adjust Strategy Leverage / Margin Mode
 app.post('/api/positions/leverage', async (req, res) => {
-  const { symbol, timeframe, leverage, margin_mode } = req.body;
+  const { symbol, timeframe, leverage, margin_mode, exchange } = req.body;
+  const ex = (exchange || 'BINANCE').toUpperCase();
   try {
     if (leverage) {
       await DB.run(`
         UPDATE symbol_strategies 
         SET leverage = ?, updated_at = ? 
-        WHERE symbol = ? AND (timeframe = ? OR ? IS NULL)
-      `, [Number(leverage), Date.now(), symbol.toUpperCase(), timeframe || null, timeframe ? 0 : null]);
+        WHERE symbol = ? AND exchange = ? AND (timeframe = ? OR ? IS NULL)
+      `, [Number(leverage), Date.now(), symbol.toUpperCase(), ex, timeframe || null, timeframe ? 0 : null]);
     }
     if (margin_mode) {
       await DB.run(`
         UPDATE symbol_strategies 
         SET margin_mode = ?, updated_at = ? 
-        WHERE symbol = ? AND (timeframe = ? OR ? IS NULL)
-      `, [margin_mode.toUpperCase(), Date.now(), symbol.toUpperCase(), timeframe || null, timeframe ? 0 : null]);
+        WHERE symbol = ? AND exchange = ? AND (timeframe = ? OR ? IS NULL)
+      `, [margin_mode.toUpperCase(), Date.now(), symbol.toUpperCase(), ex, timeframe || null, timeframe ? 0 : null]);
     }
-    res.json({ success: true, message: `Updated leverage ${leverage}x (${margin_mode}) for ${symbol}` });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 5d. Place Manual Binance Futures Order
-app.post('/api/orders/place', async (req, res) => {
-  const { symbol, direction, entry_price, quantity, leverage, sl_price, tp1_price, tp2_price } = req.body;
-  try {
-    const tradeExecutor = require('./tradeExecutor');
-    const ep = parseFloat(entry_price);
-    const sl = parseFloat(sl_price || (direction === 'BUY' ? ep * 0.98 : ep * 1.02));
-    const tp1 = parseFloat(tp1_price || (direction === 'BUY' ? ep * 1.015 : ep * 0.985));
-    const tp2 = parseFloat(tp2_price || (direction === 'BUY' ? ep * 1.03 : ep * 0.97));
-    
-    const syntheticSignal = {
-      symbol: symbol.toUpperCase(),
-      strategy_id: `strat_${symbol.toLowerCase()}_manual`,
-      id: `manual_${Date.now()}`,
-      direction: direction.toUpperCase(),
-      entry_price: ep,
-      sl_price: sl,
-      tp1_price: tp1,
-      tp2_price: tp2,
-      risk_pct: 1.0,
-      timestamp: Date.now()
-    };
-
-    const posId = await tradeExecutor.openPositionFromSignal(syntheticSignal);
-    if (!posId) {
-      return res.status(400).json({ success: false, error: 'Could not open position (check active positions or margin).' });
-    }
-
-    notification.broadcast('POSITIONS_UPDATE', {
-      positions: await DB.getActivePositions(),
-      stats: await DB.getPerformanceStats()
-    });
-    res.json({ success: true, posId });
+    res.json({ success: true, message: `Updated leverage ${leverage}x (${margin_mode}) for ${symbol} [${ex}]` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -337,16 +319,18 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
-// 7. Interactive Chart Data Feed (OHLCV + SMC Calculation)
+// 7. Interactive Chart Data Feed (Multi-Exchange)
 app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
   const { symbol, timeframe } = req.params;
   const sym = symbol.toUpperCase();
   const tf = timeframe || '5m';
+  const exchange = (req.query.exchange || 'BINANCE').toUpperCase();
+  const exAdapter = exchangeManager.getExchange(exchange);
 
   try {
-    let candles = await DB.getCandles(sym, tf, 1500);
+    let candles = await DB.getCandles(sym, tf, 1500, exchange);
     if (candles.length < 50) {
-      candles = await binanceClient.syncCandles(sym, tf, 1500);
+      candles = await exAdapter.syncCandles(sym, tf, 1500);
     }
 
     const calc = Stat2Box.calculate(candles, {
@@ -364,6 +348,7 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     res.json({
       success: true,
       symbol: sym,
+      exchange: exchange,
       timeframe: tf,
       candles: candles,
       cards: calc ? calc.cards : [],
@@ -376,10 +361,31 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
   }
 });
 
-// 8. Discover Binance Market Pairs
+// 8. Discover Exchange Market Pairs
 app.get('/api/binance/symbols', async (req, res) => {
   try {
-    const list = await binanceClient.getExchangeInfo();
+    const ex = exchangeManager.getExchange('BINANCE');
+    const list = await ex.getExchangeInfo();
+    res.json({ success: true, data: list });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/bybit/symbols', async (req, res) => {
+  try {
+    const ex = exchangeManager.getExchange('BYBIT');
+    const list = await ex.getExchangeInfo();
+    res.json({ success: true, data: list });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/okx/symbols', async (req, res) => {
+  try {
+    const ex = exchangeManager.getExchange('OKX');
+    const list = await ex.getExchangeInfo();
     res.json({ success: true, data: list });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -398,6 +404,81 @@ app.post('/api/logs/clear', (req, res) => {
   logger.clear();
   logger.info('SYSTEM', 'System log buffer cleared by user from dashboard.');
   res.json({ success: true });
+});
+
+// 10. Chart Drawings Persistence API
+app.get('/api/drawings', async (req, res) => {
+  try {
+    const symbol = req.query.symbol || 'BTCUSDT';
+    const exchange = req.query.exchange || null;
+    const drawings = await DB.getDrawings(symbol, exchange);
+    res.json({ success: true, data: drawings });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/drawings', async (req, res) => {
+  try {
+    const { id, symbol, exchange, timeframe, drawing_type, data_json } = req.body;
+    if (!symbol || !drawing_type || !data_json) {
+      return res.status(400).json({ success: false, error: 'symbol, drawing_type, and data_json are required' });
+    }
+    const result = await DB.saveDrawing({ id, symbol, exchange, timeframe, drawing_type, data_json });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/drawings/:id', async (req, res) => {
+  try {
+    await DB.deleteDrawing(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/drawings', async (req, res) => {
+  try {
+    const symbol = req.query.symbol;
+    const exchange = req.query.exchange || null;
+    if (!symbol) return res.status(400).json({ success: false, error: 'symbol is required' });
+    await DB.clearDrawings(symbol, exchange);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 11. Order & Trade Notes API
+app.get('/api/notes/:targetId', async (req, res) => {
+  try {
+    const note = await DB.getOrderNote(req.params.targetId);
+    res.json({ success: true, data: note });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/notes/:targetId', async (req, res) => {
+  try {
+    const { symbol, note_text } = req.body;
+    const result = await DB.saveOrderNote(req.params.targetId, symbol, note_text);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/notes', async (req, res) => {
+  try {
+    const notes = await DB.getAllOrderNotes();
+    res.json({ success: true, data: notes });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 module.exports = { app, server };

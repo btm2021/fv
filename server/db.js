@@ -1,6 +1,6 @@
 /**
- * SQLite3 Database Manager for 24/7 Binance Futures SMC Trading System
- * Includes rich feature vector logging for Machine Learning & Strategy Optimization
+ * SQLite3 Database Manager for Multi-Exchange SMC Trading System
+ * Supports Binance Futures (USDT-M) & Bybit (V5 Linear) with isolated rate limits and feature tracking
  */
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
@@ -62,18 +62,21 @@ class DBManager {
       -- 2. Whitelist Symbols Entity
       CREATE TABLE IF NOT EXISTS whitelist_symbols (
         id TEXT PRIMARY KEY,
-        symbol TEXT UNIQUE NOT NULL,
+        symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
         is_enabled INTEGER DEFAULT 1,
         category TEXT DEFAULT 'Futures',
         tags TEXT DEFAULT '[]',
         created_at INTEGER,
-        updated_at INTEGER
+        updated_at INTEGER,
+        UNIQUE(symbol, exchange)
       );
 
-      -- 3. Symbol Strategies (1 Symbol -> Multiple Strategies)
+      -- 3. Symbol Strategies (1 Symbol -> Multiple Strategies per Exchange)
       CREATE TABLE IF NOT EXISTS symbol_strategies (
         id TEXT PRIMARY KEY,
         symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
         strategy_name TEXT NOT NULL,
         strategy_type TEXT DEFAULT 'dual',
         timeframe TEXT DEFAULT '5m',
@@ -98,6 +101,7 @@ class DBManager {
       -- 4. Cached OHLCV Candles
       CREATE TABLE IF NOT EXISTS ohlcv_candles (
         symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
         timeframe TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         open REAL NOT NULL,
@@ -105,15 +109,16 @@ class DBManager {
         low REAL NOT NULL,
         close REAL NOT NULL,
         volume REAL NOT NULL,
-        PRIMARY KEY (symbol, timeframe, timestamp)
+        PRIMARY KEY (symbol, exchange, timeframe, timestamp)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_candles_lookup ON ohlcv_candles(symbol, timeframe, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_candles_lookup ON ohlcv_candles(symbol, exchange, timeframe, timestamp DESC);
 
-      -- 5. Signals & Alerts Feed (Rich ML Features & Rationale)
+      -- 5. Signals & Alerts Feed
       CREATE TABLE IF NOT EXISTS signals_alerts (
         id TEXT PRIMARY KEY,
         symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
         strategy_id TEXT,
         strategy_name TEXT,
         timeframe TEXT NOT NULL,
@@ -144,10 +149,11 @@ class DBManager {
 
       CREATE INDEX IF NOT EXISTS idx_signals_time ON signals_alerts(timestamp DESC);
 
-      -- 6. Binance Futures Trade Positions (Complete Forensics & Quantitative Results)
+      -- 6. Trade Positions (Multi-Exchange Forensics)
       CREATE TABLE IF NOT EXISTS trade_positions (
         id TEXT PRIMARY KEY,
         symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
         strategy_id TEXT,
         signal_id TEXT,
         signal_type TEXT,
@@ -212,21 +218,108 @@ class DBManager {
   }
 
   async applyMigrations() {
-    // Dynamically add missing feature & rationale columns for existing SQLite DBs
     const safeAddColumn = async (table, colDef) => {
       try {
         await this.run(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
-      } catch (e) {
-        // Column already exists
-      }
+      } catch (e) {}
     };
+
+    // Multi-Exchange column support
+    await safeAddColumn('whitelist_symbols', "exchange TEXT DEFAULT 'BINANCE'");
+    await safeAddColumn('symbol_strategies', "exchange TEXT DEFAULT 'BINANCE'");
+    await safeAddColumn('ohlcv_candles', "exchange TEXT DEFAULT 'BINANCE'");
+    await safeAddColumn('signals_alerts', "exchange TEXT DEFAULT 'BINANCE'");
+    await safeAddColumn('trade_positions', "exchange TEXT DEFAULT 'BINANCE'");
+
+    // Chart Drawings Table
+    await this.run(`
+      CREATE TABLE IF NOT EXISTS chart_drawings (
+        id TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        exchange TEXT DEFAULT 'BINANCE',
+        timeframe TEXT,
+        drawing_type TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `);
+    await this.run(`CREATE INDEX IF NOT EXISTS idx_drawings_sym ON chart_drawings(symbol, exchange)`);
+
+    // Order & Trade Notes Table
+    await this.run(`
+      CREATE TABLE IF NOT EXISTS order_notes (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        note_text TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        UNIQUE(target_id)
+      )
+    `);
+    await this.run(`CREATE INDEX IF NOT EXISTS idx_notes_target ON order_notes(target_id)`);
+
+    // Safe migration: ensure whitelist_symbols has UNIQUE(symbol, exchange)
+    try {
+      const wlTable = await this.get("SELECT sql FROM sqlite_master WHERE type='table' AND name='whitelist_symbols'");
+      if (wlTable && wlTable.sql.includes('symbol TEXT UNIQUE')) {
+        await this.run(`
+          CREATE TABLE IF NOT EXISTS whitelist_symbols_mig (
+            id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            exchange TEXT DEFAULT 'BINANCE',
+            is_enabled INTEGER DEFAULT 1,
+            category TEXT DEFAULT 'Futures',
+            tags TEXT DEFAULT '[]',
+            created_at INTEGER,
+            updated_at INTEGER,
+            UNIQUE(symbol, exchange)
+          )
+        `);
+        await this.run(`
+          INSERT OR IGNORE INTO whitelist_symbols_mig (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
+          SELECT id, symbol, COALESCE(exchange, 'BINANCE'), is_enabled, category, tags, created_at, updated_at FROM whitelist_symbols
+        `);
+        await this.run(`DROP TABLE whitelist_symbols`);
+        await this.run(`ALTER TABLE whitelist_symbols_mig RENAME TO whitelist_symbols`);
+      }
+    } catch (e) {}
+
+    // Safe migration: ensure ohlcv_candles composite primary key includes exchange
+    try {
+      const candleTable = await this.get("SELECT sql FROM sqlite_master WHERE type='table' AND name='ohlcv_candles'");
+      if (candleTable && candleTable.sql.includes('PRIMARY KEY (symbol, timeframe, timestamp)')) {
+        await this.run(`
+          CREATE TABLE IF NOT EXISTS ohlcv_candles_mig (
+            symbol TEXT NOT NULL,
+            exchange TEXT DEFAULT 'BINANCE',
+            timeframe TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            open REAL NOT NULL,
+            high REAL NOT NULL,
+            low REAL NOT NULL,
+            close REAL NOT NULL,
+            volume REAL NOT NULL,
+            PRIMARY KEY (symbol, exchange, timeframe, timestamp)
+          )
+        `);
+        await this.run(`
+          INSERT OR IGNORE INTO ohlcv_candles_mig (symbol, exchange, timeframe, timestamp, open, high, low, close, volume)
+          SELECT symbol, COALESCE(exchange, 'BINANCE'), timeframe, timestamp, open, high, low, close, volume FROM ohlcv_candles
+        `);
+        await this.run(`DROP TABLE ohlcv_candles`);
+        await this.run(`ALTER TABLE ohlcv_candles_mig RENAME TO ohlcv_candles`);
+        await this.run(`CREATE INDEX IF NOT EXISTS idx_candles_lookup ON ohlcv_candles(symbol, exchange, timeframe, timestamp DESC)`);
+      }
+    } catch (e) {}
 
     // Strategies table
     await safeAddColumn('symbol_strategies', 'leverage INTEGER DEFAULT 20');
     await safeAddColumn('symbol_strategies', "margin_mode TEXT DEFAULT 'ISOLATED'");
     await safeAddColumn('symbol_strategies', "order_type TEXT DEFAULT 'MARKET'");
 
-    // Positions table - Binance & ML Features
+    // Positions table
     await safeAddColumn('trade_positions', 'signal_type TEXT');
     await safeAddColumn('trade_positions', 'leverage INTEGER DEFAULT 20');
     await safeAddColumn('trade_positions', "margin_mode TEXT DEFAULT 'ISOLATED'");
@@ -315,73 +408,86 @@ class DBManager {
     return settings;
   }
 
-  // ── WHITELIST SYMBOLS ──
-  async getWhitelistSymbols() {
+  // ── WHITELIST SYMBOLS (MULTI-EXCHANGE) ──
+  async getWhitelistSymbols(exchange = null) {
+    if (exchange) {
+      return await this.all('SELECT * FROM whitelist_symbols WHERE exchange = ? ORDER BY created_at ASC', [exchange.toUpperCase()]);
+    }
     return await this.all('SELECT * FROM whitelist_symbols ORDER BY created_at ASC');
   }
 
-  async addWhitelistSymbol(symbol, category = 'Futures', tags = []) {
-    const id = `sym_${symbol.toLowerCase()}`;
+  async addWhitelistSymbol(symbol, category = 'Futures', tags = [], exchange = 'BINANCE') {
+    const ex = (exchange || 'BINANCE').toUpperCase();
+    const id = `sym_${ex.toLowerCase()}_${symbol.toLowerCase()}`;
     const now = Date.now();
     await this.run(`
-      INSERT INTO whitelist_symbols (id, symbol, is_enabled, category, tags, created_at, updated_at)
-      VALUES (?, ?, 1, ?, ?, ?, ?)
-      ON CONFLICT(symbol) DO UPDATE SET is_enabled = 1, updated_at = ?
-    `, [id, symbol.toUpperCase(), category, JSON.stringify(tags), now, now, now]);
+      INSERT INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET is_enabled = 1, updated_at = ?
+    `, [id, symbol.toUpperCase(), ex, category, JSON.stringify(tags), now, now, now]);
 
-    // Create default 5m & 15m Binance Futures strategies
-    await this.addStrategy(symbol.toUpperCase(), `${symbol.toUpperCase()} Dual 5m Pro`, 'dual', '5m', 1.0, 20);
-    await this.addStrategy(symbol.toUpperCase(), `${symbol.toUpperCase()} Dual 15m Pro`, 'dual', '15m', 1.0, 20);
+    // Create default 5m & 15m strategies
+    await this.addStrategy(symbol.toUpperCase(), `${symbol.toUpperCase()} Dual 5m Pro`, 'dual', '5m', 1.0, 20, ex);
+    await this.addStrategy(symbol.toUpperCase(), `${symbol.toUpperCase()} Dual 15m Pro`, 'dual', '15m', 1.0, 20, ex);
     return id;
   }
 
   async toggleWhitelistSymbol(id, isEnabled) {
     const now = Date.now();
     await this.run('UPDATE whitelist_symbols SET is_enabled = ?, updated_at = ? WHERE id = ?', [isEnabled ? 1 : 0, now, id]);
-    const sym = await this.get('SELECT symbol FROM whitelist_symbols WHERE id = ?', [id]);
+    const sym = await this.get('SELECT symbol, exchange FROM whitelist_symbols WHERE id = ?', [id]);
     if (sym) {
-      await this.run('UPDATE symbol_strategies SET is_enabled = ?, updated_at = ? WHERE symbol = ?', [isEnabled ? 1 : 0, now, sym.symbol]);
+      await this.run('UPDATE symbol_strategies SET is_enabled = ?, updated_at = ? WHERE symbol = ? AND exchange = ?', [isEnabled ? 1 : 0, now, sym.symbol, sym.exchange]);
     }
   }
 
   async deleteWhitelistSymbol(id) {
-    const sym = await this.get('SELECT symbol FROM whitelist_symbols WHERE id = ?', [id]);
+    const sym = await this.get('SELECT symbol, exchange FROM whitelist_symbols WHERE id = ?', [id]);
     if (sym) {
-      await this.run('DELETE FROM symbol_strategies WHERE symbol = ?', [sym.symbol]);
-      await this.run('DELETE FROM ohlcv_candles WHERE symbol = ?', [sym.symbol]);
+      await this.run('DELETE FROM symbol_strategies WHERE symbol = ? AND exchange = ?', [sym.symbol, sym.exchange]);
+      await this.run('DELETE FROM ohlcv_candles WHERE symbol = ? AND exchange = ?', [sym.symbol, sym.exchange]);
     }
     await this.run('DELETE FROM whitelist_symbols WHERE id = ?', [id]);
   }
 
-  // ── SYMBOL STRATEGIES ──
-  async getStrategiesForSymbol(symbol) {
-    return await this.all('SELECT * FROM symbol_strategies WHERE symbol = ? ORDER BY timeframe ASC', [symbol]);
+  // ── SYMBOL STRATEGIES (MULTI-EXCHANGE) ──
+  async getStrategiesForSymbol(symbol, exchange = 'BINANCE') {
+    return await this.all('SELECT * FROM symbol_strategies WHERE symbol = ? AND exchange = ? ORDER BY timeframe ASC', [symbol.toUpperCase(), exchange.toUpperCase()]);
   }
 
-  async getAllEnabledStrategies() {
+  async getAllEnabledStrategies(exchange = null) {
+    if (exchange) {
+      return await this.all(`
+        SELECT s.* 
+        FROM symbol_strategies s
+        JOIN whitelist_symbols w ON s.symbol = w.symbol AND s.exchange = w.exchange
+        WHERE s.is_enabled = 1 AND w.is_enabled = 1 AND s.exchange = ?
+      `, [exchange.toUpperCase()]);
+    }
     return await this.all(`
       SELECT s.* 
       FROM symbol_strategies s
-      JOIN whitelist_symbols w ON s.symbol = w.symbol
+      JOIN whitelist_symbols w ON s.symbol = w.symbol AND s.exchange = w.exchange
       WHERE s.is_enabled = 1 AND w.is_enabled = 1
     `);
   }
 
-  async addStrategy(symbol, name, type = 'dual', timeframe = '5m', riskPct = 1.0, leverage = 20) {
-    const id = `strat_${symbol.toLowerCase()}_${timeframe}_${type}`;
+  async addStrategy(symbol, name, type = 'dual', timeframe = '5m', riskPct = 1.0, leverage = 20, exchange = 'BINANCE') {
+    const ex = (exchange || 'BINANCE').toUpperCase();
+    const id = `strat_${ex.toLowerCase()}_${symbol.toLowerCase()}_${timeframe}_${type}`;
     const now = Date.now();
     await this.run(`
       INSERT INTO symbol_strategies (
-        id, symbol, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+        id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
         cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback,
         created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, 1, ?, ?, 'ISOLATED', 'MARKET',
+        ?, ?, ?, ?, ?, ?, 1, ?, ?, 'ISOLATED', 'MARKET',
         14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30,
         ?, ?
       )
       ON CONFLICT(id) DO UPDATE SET is_enabled = 1, updated_at = ?
-    `, [id, symbol.toUpperCase(), name, type, timeframe, riskPct, leverage, now, now, now]);
+    `, [id, symbol.toUpperCase(), ex, name, type, timeframe, riskPct, leverage, now, now, now]);
     return id;
   }
 
@@ -403,49 +509,53 @@ class DBManager {
     await this.run('DELETE FROM symbol_strategies WHERE id = ?', [id]);
   }
 
-  // ── OHLCV CANDLES ──
-  async saveCandles(symbol, timeframe, candles) {
+  // ── OHLCV CANDLES (MULTI-EXCHANGE) ──
+  async saveCandles(symbol, timeframe, candles, exchange = 'BINANCE') {
     if (!candles || candles.length === 0) return;
+    const ex = (exchange || 'BINANCE').toUpperCase();
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO ohlcv_candles (symbol, timeframe, timestamp, open, high, low, close, volume)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO ohlcv_candles (symbol, exchange, timeframe, timestamp, open, high, low, close, volume)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.db.serialize(() => {
       this.db.run('BEGIN TRANSACTION');
       for (const c of candles) {
-        stmt.run([symbol, timeframe, c.time, c.open, c.high, c.low, c.close, c.volume]);
+        stmt.run([symbol.toUpperCase(), ex, timeframe, c.time, c.open, c.high, c.low, c.close, c.volume]);
       }
       this.db.run('COMMIT');
     });
   }
 
-  async getCandles(symbol, timeframe, limit = 1500) {
+  async getCandles(symbol, timeframe, limit = 1500, exchange = 'BINANCE') {
+    const ex = (exchange || 'BINANCE').toUpperCase();
     const rows = await this.all(`
       SELECT timestamp as time, open, high, low, close, volume
       FROM ohlcv_candles
-      WHERE symbol = ? AND timeframe = ?
+      WHERE symbol = ? AND exchange = ? AND timeframe = ?
       ORDER BY timestamp DESC
       LIMIT ?
-    `, [symbol, timeframe, limit]);
+    `, [symbol.toUpperCase(), ex, timeframe, limit]);
     return rows.reverse();
   }
 
-  // ── SIGNALS & ALERTS FEED ──
+  // ── SIGNALS & ALERTS FEED (MULTI-EXCHANGE) ──
   async saveSignal(signal) {
-    const id = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const ex = (signal.exchange || 'BINANCE').toUpperCase();
+    const id = `sig_${ex.toLowerCase()}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = Date.now();
     await this.run(`
       INSERT INTO signals_alerts (
-        id, symbol, strategy_id, strategy_name, timeframe, signal_type, direction,
+        id, symbol, exchange, strategy_id, strategy_name, timeframe, signal_type, direction,
         entry_price, tp1_price, tp2_price, sl_price, cmo_val, atr_val, atr_pct, rr_ratio,
         nearest_liq_dist_pct, danger_level, market_regime, side_rationale, entry_rationale,
         tp1_rationale, tp2_rationale, sl_rationale, rationale, features_json,
         timestamp, is_sent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
       id,
-      signal.symbol,
+      signal.symbol.toUpperCase(),
+      ex,
       signal.strategy_id || '',
       signal.strategy_name || '',
       signal.timeframe,
@@ -475,17 +585,21 @@ class DBManager {
     return id;
   }
 
-  async getSignals(limit = 50) {
+  async getSignals(limit = 50, exchange = null) {
+    if (exchange) {
+      return await this.all('SELECT * FROM signals_alerts WHERE exchange = ? ORDER BY timestamp DESC LIMIT ?', [exchange.toUpperCase(), limit]);
+    }
     return await this.all('SELECT * FROM signals_alerts ORDER BY timestamp DESC LIMIT ?', [limit]);
   }
 
-  // ── BINANCE FUTURES POSITIONS & MACHINE LEARNING DATASET ──
+  // ── TRADE POSITIONS & PERFORMANCE (MULTI-EXCHANGE) ──
   async createPosition(pos) {
-    const id = `pos_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const ex = (pos.exchange || 'BINANCE').toUpperCase();
+    const id = `pos_${ex.toLowerCase()}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = Date.now();
     await this.run(`
       INSERT INTO trade_positions (
-        id, symbol, strategy_id, signal_id, signal_type, direction, status,
+        id, symbol, exchange, strategy_id, signal_id, signal_type, direction, status,
         leverage, margin_mode, entry_price, current_price,
         tp1_price, tp2_price, sl_price, original_sl,
         pos_size_usd, quantity, initial_margin, maintenance_margin,
@@ -496,7 +610,7 @@ class DBManager {
         gross_pnl_usd, fee_usd, entry_fee, exit_fee, funding_fee,
         net_pnl_usd, net_pnl_pct, open_time, created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, 'ACTIVE',
+        ?, ?, ?, ?, ?, ?, ?, 'ACTIVE',
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -509,7 +623,8 @@ class DBManager {
       )
     `, [
       id,
-      pos.symbol,
+      pos.symbol.toUpperCase(),
+      ex,
       pos.strategy_id || '',
       pos.signal_id || '',
       pos.signal_type || '',
@@ -549,7 +664,10 @@ class DBManager {
     return id;
   }
 
-  async getActivePositions() {
+  async getActivePositions(exchange = null) {
+    if (exchange) {
+      return await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE' AND exchange = ? ORDER BY open_time DESC", [exchange.toUpperCase()]);
+    }
     return await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE' ORDER BY open_time DESC");
   }
 
@@ -571,13 +689,23 @@ class DBManager {
     await this.run(`UPDATE trade_positions SET ${fields.join(', ')} WHERE id = ?`, values);
   }
 
-  async getAllPositions(limit = 200) {
+  async getAllPositions(limit = 200, exchange = null) {
+    if (exchange) {
+      return await this.all('SELECT * FROM trade_positions WHERE exchange = ? ORDER BY open_time DESC LIMIT ?', [exchange.toUpperCase(), limit]);
+    }
     return await this.all('SELECT * FROM trade_positions ORDER BY open_time DESC LIMIT ?', [limit]);
   }
 
-  async getPerformanceStats() {
-    const closedTrades = await this.all("SELECT * FROM trade_positions WHERE status != 'ACTIVE'");
-    const activePositions = await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE'");
+  async getPerformanceStats(exchange = null) {
+    const closedSql = exchange
+      ? "SELECT * FROM trade_positions WHERE status != 'ACTIVE' AND exchange = ?"
+      : "SELECT * FROM trade_positions WHERE status != 'ACTIVE'";
+    const activeSql = exchange
+      ? "SELECT * FROM trade_positions WHERE status = 'ACTIVE' AND exchange = ?"
+      : "SELECT * FROM trade_positions WHERE status = 'ACTIVE'";
+
+    const closedTrades = await this.all(closedSql, exchange ? [exchange.toUpperCase()] : []);
+    const activePositions = await this.all(activeSql, exchange ? [exchange.toUpperCase()] : []);
 
     const total = closedTrades.length;
     const wins = closedTrades.filter(t => t.net_pnl_usd > 0);
@@ -603,6 +731,7 @@ class DBManager {
     const accountMarginRatio = marginBalance > 0 ? (totalMaintenanceMarginUsed / marginBalance) * 100.0 : 0.0;
 
     return {
+      exchange: exchange || 'ALL',
       total_trades: total,
       wins: wins.length,
       losses: losses.length,
@@ -622,15 +751,100 @@ class DBManager {
   }
 
   // ── RESET OPERATIONS ──
-  async resetTradesAndSignals() {
-    await this.run('DELETE FROM trade_positions');
-    await this.run('DELETE FROM signals_alerts');
-    await this.setSetting('account_equity', '1000.00');
-    try {
-      await this.run('VACUUM');
-    } catch (e) {
-      // Non-blocking vacuum
+  async resetTradesAndSignals(exchange = null) {
+    if (exchange) {
+      await this.run('DELETE FROM trade_positions WHERE exchange = ?', [exchange.toUpperCase()]);
+      await this.run('DELETE FROM signals_alerts WHERE exchange = ?', [exchange.toUpperCase()]);
+    } else {
+      await this.run('DELETE FROM trade_positions');
+      await this.run('DELETE FROM signals_alerts');
     }
+    await this.setSetting('account_equity', '1000.00');
+    try { await this.run('VACUUM'); } catch (e) {}
+  }
+
+  // ── CHART DRAWINGS PERSISTENCE ──
+  async saveDrawing(drawing) {
+    const { id, symbol, exchange, timeframe, drawing_type, data_json } = drawing;
+    const now = Date.now();
+    await this.run(`
+      INSERT INTO chart_drawings (id, symbol, exchange, timeframe, drawing_type, data_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        timeframe = excluded.timeframe,
+        drawing_type = excluded.drawing_type,
+        data_json = excluded.data_json,
+        updated_at = excluded.updated_at
+    `, [
+      id || `draw_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      symbol.toUpperCase(),
+      (exchange || 'BINANCE').toUpperCase(),
+      timeframe || null,
+      drawing_type,
+      typeof data_json === 'object' ? JSON.stringify(data_json) : data_json,
+      now,
+      now
+    ]);
+    return { success: true, id };
+  }
+
+  async getDrawings(symbol, exchange = null) {
+    if (exchange && exchange !== 'ALL') {
+      const rows = await this.all(
+        'SELECT * FROM chart_drawings WHERE symbol = ? AND exchange = ? ORDER BY created_at ASC',
+        [symbol.toUpperCase(), exchange.toUpperCase()]
+      );
+      return rows.map(r => ({ ...r, data: JSON.parse(r.data_json || '{}') }));
+    }
+    const rows = await this.all(
+      'SELECT * FROM chart_drawings WHERE symbol = ? ORDER BY created_at ASC',
+      [symbol.toUpperCase()]
+    );
+    return rows.map(r => ({ ...r, data: JSON.parse(r.data_json || '{}') }));
+  }
+
+  async deleteDrawing(id) {
+    await this.run('DELETE FROM chart_drawings WHERE id = ?', [id]);
+    return { success: true };
+  }
+
+  async clearDrawings(symbol, exchange = null) {
+    if (exchange && exchange !== 'ALL') {
+      await this.run('DELETE FROM chart_drawings WHERE symbol = ? AND exchange = ?', [symbol.toUpperCase(), exchange.toUpperCase()]);
+    } else {
+      await this.run('DELETE FROM chart_drawings WHERE symbol = ?', [symbol.toUpperCase()]);
+    }
+    return { success: true };
+  }
+
+  // ── ORDER & TRADE NOTES PERSISTENCE ──
+  async saveOrderNote(targetId, symbol, noteText) {
+    const now = Date.now();
+    await this.run(`
+      INSERT INTO order_notes (id, target_id, symbol, note_text, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(target_id) DO UPDATE SET
+        symbol = excluded.symbol,
+        note_text = excluded.note_text,
+        updated_at = excluded.updated_at
+    `, [
+      `note_${targetId}`,
+      targetId,
+      (symbol || '').toUpperCase(),
+      noteText || '',
+      now,
+      now
+    ]);
+    return { success: true, target_id: targetId, note_text: noteText };
+  }
+
+  async getOrderNote(targetId) {
+    const row = await this.get('SELECT * FROM order_notes WHERE target_id = ?', [targetId]);
+    return row || { target_id: targetId, note_text: '' };
+  }
+
+  async getAllOrderNotes() {
+    return await this.all('SELECT * FROM order_notes ORDER BY updated_at DESC');
   }
 
   async resetEntireDatabase() {
@@ -639,13 +853,11 @@ class DBManager {
     await this.run('DELETE FROM ohlcv_candles');
     await this.run('DELETE FROM symbol_strategies');
     await this.run('DELETE FROM whitelist_symbols');
+    await this.run('DELETE FROM chart_drawings');
+    await this.run('DELETE FROM order_notes');
     await this.setSetting('account_equity', '1000.00');
     await this.setSetting('is_scanner_active', '1');
-    try {
-      await this.run('VACUUM');
-    } catch (e) {
-      // Non-blocking vacuum
-    }
+    try { await this.run('VACUUM'); } catch (e) {}
   }
 }
 

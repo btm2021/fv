@@ -43,8 +43,9 @@
     },
 
     calculate: function (candles, inputs) {
-      if (!SMC || !SMC.atrBot) return [];
-      return SMC.atrBot(candles, {
+      const smcEngine = SMC || (typeof window !== 'undefined' ? (window.SMC || window.SmartMoneyConcepts) : null) || (typeof globalThis !== 'undefined' ? (globalThis.SMC || globalThis.SmartMoneyConcepts) : null);
+      if (!smcEngine || typeof smcEngine.atrBot !== 'function') return [];
+      return smcEngine.atrBot(candles, {
         maType: inputs.maType || 'VIDYA',
         source: inputs.source || 'close',
         cmoLength: inputs.cmoLength || 14,

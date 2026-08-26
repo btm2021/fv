@@ -149,7 +149,8 @@
 
     // ── Calculate ──
     calculate: function (candles, inputs) {
-      if (!SMC || !SMC.atrBot || !SMC.swingHighsLows || !SMC.liquidity) return [];
+      const smcEngine = SMC || (typeof window !== 'undefined' ? (window.SMC || window.SmartMoneyConcepts) : null) || (typeof globalThis !== 'undefined' ? (globalThis.SMC || globalThis.SmartMoneyConcepts) : null);
+      if (!smcEngine || typeof smcEngine.atrBot !== 'function' || typeof smcEngine.swingHighsLows !== 'function' || typeof smcEngine.liquidity !== 'function') return [];
 
       const n = candles.length;
       if (n < 30) return [];
@@ -159,7 +160,7 @@
       const rangePct     = (parseFloat(inputs.rangePercent) || 1.0) / 100;
 
       // 1. ATRBot calculation
-      const atrData = SMC.atrBot(candles, {
+      const atrData = smcEngine.atrBot(candles, {
         maType   : 'VIDYA',
         source   : 'close',
         cmoLength: inputs.cmoLength || 14,
@@ -170,8 +171,8 @@
       if (!atrData || atrData.length === 0) return [];
 
       // 2. SMC Liquidity calculation
-      const swings    = SMC.swingHighsLows(candles, parseInt(inputs.swingLength, 10) || 20);
-      const liqResult = SMC.liquidity(candles, swings, rangePct);
+      const swings    = smcEngine.swingHighsLows(candles, parseInt(inputs.swingLength, 10) || 20);
+      const liqResult = smcEngine.liquidity(candles, swings, rangePct);
       const liqZones  = buildLiqZones(liqResult);
 
       // 3. Detect ATRBot signals + apply filter
