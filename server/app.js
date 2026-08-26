@@ -218,6 +218,87 @@ app.get('/api/positions', async (req, res) => {
   }
 });
 
+// 5b. Close Position at Market Price
+app.post('/api/positions/close/:id', async (req, res) => {
+  try {
+    const tradeExecutor = require('./tradeExecutor');
+    const binanceWs = require('./binanceWs');
+    const pos = await DB.get('SELECT symbol FROM trade_positions WHERE id = ?', [req.params.id]);
+    const livePrice = pos ? binanceWs.getLivePrice(pos.symbol) : null;
+    const result = await tradeExecutor.closePositionMarket(req.params.id, livePrice);
+    
+    notification.broadcast('POSITIONS_UPDATE', {
+      positions: await DB.getActivePositions(),
+      stats: await DB.getPerformanceStats()
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5c. Adjust Strategy Leverage / Margin Mode
+app.post('/api/positions/leverage', async (req, res) => {
+  const { symbol, timeframe, leverage, margin_mode } = req.body;
+  try {
+    if (leverage) {
+      await DB.run(`
+        UPDATE symbol_strategies 
+        SET leverage = ?, updated_at = ? 
+        WHERE symbol = ? AND (timeframe = ? OR ? IS NULL)
+      `, [Number(leverage), Date.now(), symbol.toUpperCase(), timeframe || null, timeframe ? 0 : null]);
+    }
+    if (margin_mode) {
+      await DB.run(`
+        UPDATE symbol_strategies 
+        SET margin_mode = ?, updated_at = ? 
+        WHERE symbol = ? AND (timeframe = ? OR ? IS NULL)
+      `, [margin_mode.toUpperCase(), Date.now(), symbol.toUpperCase(), timeframe || null, timeframe ? 0 : null]);
+    }
+    res.json({ success: true, message: `Updated leverage ${leverage}x (${margin_mode}) for ${symbol}` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5d. Place Manual Binance Futures Order
+app.post('/api/orders/place', async (req, res) => {
+  const { symbol, direction, entry_price, quantity, leverage, sl_price, tp1_price, tp2_price } = req.body;
+  try {
+    const tradeExecutor = require('./tradeExecutor');
+    const ep = parseFloat(entry_price);
+    const sl = parseFloat(sl_price || (direction === 'BUY' ? ep * 0.98 : ep * 1.02));
+    const tp1 = parseFloat(tp1_price || (direction === 'BUY' ? ep * 1.015 : ep * 0.985));
+    const tp2 = parseFloat(tp2_price || (direction === 'BUY' ? ep * 1.03 : ep * 0.97));
+    
+    const syntheticSignal = {
+      symbol: symbol.toUpperCase(),
+      strategy_id: `strat_${symbol.toLowerCase()}_manual`,
+      id: `manual_${Date.now()}`,
+      direction: direction.toUpperCase(),
+      entry_price: ep,
+      sl_price: sl,
+      tp1_price: tp1,
+      tp2_price: tp2,
+      risk_pct: 1.0,
+      timestamp: Date.now()
+    };
+
+    const posId = await tradeExecutor.openPositionFromSignal(syntheticSignal);
+    if (!posId) {
+      return res.status(400).json({ success: false, error: 'Could not open position (check active positions or margin).' });
+    }
+
+    notification.broadcast('POSITIONS_UPDATE', {
+      positions: await DB.getActivePositions(),
+      stats: await DB.getPerformanceStats()
+    });
+    res.json({ success: true, posId });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 6. Settings Configuration
 app.get('/api/settings', async (req, res) => {
   try {

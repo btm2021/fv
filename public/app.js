@@ -35,10 +35,19 @@ const state = {
 const el = {};
 
 function initDom() {
-  el.navEquity = document.getElementById('navEquity');
-  el.navWinRate = document.getElementById('navWinRate');
-  el.navActiveSymbols = document.getElementById('navActiveSymbols');
+  el.navMarginBalance = document.getElementById('navMarginBalance');
+  el.navWalletBalance = document.getElementById('navWalletBalance');
+  el.navUnrealizedPnl = document.getElementById('navUnrealizedPnl');
+  el.navMarginRatio = document.getElementById('navMarginRatio');
   el.scannerStatusPill = document.getElementById('scannerStatusPill');
+
+  el.tickerSymbolName = document.getElementById('tickerSymbolName');
+  el.tickerMarkPrice = document.getElementById('tickerMarkPrice');
+  el.tickerChange24h = document.getElementById('tickerChange24h');
+  el.tickerHigh24h = document.getElementById('tickerHigh24h');
+  el.tickerLow24h = document.getElementById('tickerLow24h');
+  el.tickerVol24h = document.getElementById('tickerVol24h');
+  el.tickerFunding = document.getElementById('tickerFunding');
 
   el.btnManualScan = document.getElementById('btnManualScan');
   el.btnToggleScanner = document.getElementById('btnToggleScanner');
@@ -261,12 +270,23 @@ function updateDashboardUI() {
 }
 
 function updateHeaderMetrics() {
-  const equity = state.performance.current_equity_usd || Number(state.settings.account_equity || 1000);
-  const winRate = state.performance.win_rate !== undefined ? state.performance.win_rate : 73.2;
+  const marginBalance = state.performance.margin_balance || Number(state.settings.account_equity || 1000);
+  const walletBalance = state.performance.wallet_balance || Number(state.settings.account_equity || 1000);
+  const unrealizedPnl = state.performance.unrealized_pnl_usd || 0;
+  const unrealizedPct = walletBalance > 0 ? (unrealizedPnl / walletBalance) * 100 : 0;
+  const marginRatio = state.performance.margin_ratio || 0;
 
-  if (el.navEquity) el.navEquity.textContent = `$${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (el.navWinRate) el.navWinRate.textContent = `${winRate.toFixed(1)}%`;
-  if (el.navActiveSymbols) el.navActiveSymbols.textContent = state.whitelist.filter(w => w.is_enabled).length;
+  if (el.navMarginBalance) el.navMarginBalance.textContent = `$${marginBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (el.navWalletBalance) el.navWalletBalance.textContent = `$${walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (el.navUnrealizedPnl) {
+    const sign = unrealizedPnl >= 0 ? '+' : '';
+    el.navUnrealizedPnl.className = `m-val ${unrealizedPnl >= 0 ? 'green' : 'red'}`;
+    el.navUnrealizedPnl.textContent = `${sign}$${unrealizedPnl.toFixed(2)} (${sign}${unrealizedPct.toFixed(2)}%)`;
+  }
+  if (el.navMarginRatio) {
+    el.navMarginRatio.className = `m-val ${marginRatio > 50 ? 'red' : 'green'}`;
+    el.navMarginRatio.textContent = `${marginRatio.toFixed(2)}%`;
+  }
 
   if (el.badgeActivePositions) el.badgeActivePositions.textContent = state.activePositions.length;
   if (el.badgeWhitelistCount) el.badgeWhitelistCount.textContent = state.whitelist.length;
@@ -293,62 +313,83 @@ function updateSubnavCounters() {
   if (el.subCountSignals) el.subCountSignals.textContent = state.signals.length;
 }
 
-// ── 1. ACTIVE POSITIONS RENDERER ──
+// ── 1. ACTIVE POSITIONS RENDERER (BINANCE FUTURES PRO) ──
 function renderActivePositions() {
   if (!el.tbodyActivePositions) return;
 
   if (!state.activePositions || state.activePositions.length === 0) {
     el.tbodyActivePositions.innerHTML = `
-      <tr><td colspan="11" class="text-center empty-state">No active positions open. Scanner is monitoring market 24/7...</td></tr>
+      <tr><td colspan="10" class="text-center empty-state">No active positions open. Scanner is monitoring market 24/7...</td></tr>
     `;
     return;
   }
 
   el.tbodyActivePositions.innerHTML = state.activePositions.map(p => {
     const isLong = p.direction === 'BUY';
-    const sideBadge = isLong ? '▲ LONG' : '▼ SHORT';
+    const sideBadge = isLong ? 'LONG' : 'SHORT';
     const pnlUsd = p.net_pnl_usd || 0;
-    const pnlPct = p.net_pnl_pct || 0;
+    const roePct = p.roe_pct !== undefined ? p.roe_pct : (p.initial_margin > 0 ? (pnlUsd / p.initial_margin) * 100 : 0);
     const pnlClass = pnlUsd >= 0 ? 'green' : 'red';
     const pnlSign = pnlUsd >= 0 ? '+' : '';
 
     const curPrice = p.current_price || p.entry_price;
-    const distTp1Pct = Math.abs((p.tp1_price - curPrice) / curPrice * 100).toFixed(1);
-    const distTp2Pct = Math.abs((p.tp2_price - curPrice) / curPrice * 100).toFixed(1);
-    const distSlPct  = Math.abs((p.sl_price - curPrice) / curPrice * 100).toFixed(1);
-
-    const slStatusPill = p.is_be_moved
-      ? `<span style="color:#06b6d4; font-size:10px; font-weight:700;">⚡ BE LOCKED</span>`
-      : `<span style="color:#f43f5e; font-size:10px;">🛑 HARD SL</span>`;
+    const leverage = p.leverage || 20;
+    const marginMode = p.margin_mode || 'ISOLATED';
+    const marginRatio = (p.margin_ratio || 0).toFixed(2);
 
     return `
       <tr class="clickable-row">
-        <td style="font-weight: 800; color: #f8fafc;" onclick="openStat2Chart('${p.symbol}', '5m')">
-          ${p.symbol} <span style="font-size:10px; color:#38bdf8; font-weight:normal;">(5m)</span>
-        </td>
-        <td><span class="sig-badge ${p.direction}">${sideBadge}</span></td>
-        <td>${formatPrice(p.entry_price)}</td>
-        <td style="font-weight: 700; color:#f8fafc;">${formatPrice(curPrice)}</td>
-        <td style="color: #10b981;">
-          ${formatPrice(p.tp1_price)} <span style="font-size:10px; color:#64748b;">(${distTp1Pct}%)</span>
-        </td>
-        <td style="color: #06b6d4;">
-          ${formatPrice(p.tp2_price)} <span style="font-size:10px; color:#64748b;">(${distTp2Pct}%)</span>
+        <td onclick="openStat2Chart('${p.symbol}', '5m')">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span style="font-weight:800; color:#FFFFFF;">${p.symbol}</span>
+            <span class="binance-pos-side ${p.direction}">${sideBadge}</span>
+            <span class="binance-leverage-pill">${leverage}x ${marginMode}</span>
+          </div>
         </td>
         <td>
-          <span style="color: #f43f5e; font-weight:700;">${formatPrice(p.sl_price)}</span> ${slStatusPill}
+          <div style="display:flex; flex-direction:column;">
+            <span style="font-weight:700; color:#FFFFFF;">$${formatPrice(p.pos_size_usd)}</span>
+            <span style="font-size:10px; color:#848E9C;">${p.quantity.toFixed(3)} Qty</span>
+          </div>
         </td>
-        <td>$${(p.pos_size_usd || 0).toFixed(2)}</td>
-        <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)} (${pnlSign}${pnlPct.toFixed(2)}%)</td>
-        <td><span class="status-pill active">${p.status}</span></td>
+        <td>$${formatPrice(p.entry_price)}</td>
+        <td style="color:${isLong ? '#0ECB81' : '#F6465D'}; font-weight:700;">$${formatPrice(curPrice)}</td>
+        <td><span class="binance-liq-price">$${formatPrice(p.liq_price)}</span></td>
+        <td>$${formatPrice(p.initial_margin)}</td>
+        <td style="color:${marginRatio > 50 ? '#F6465D' : '#0ECB81'}; font-weight:700;">${marginRatio}%</td>
         <td>
-          <button class="btn-stat2-view" onclick="openStat2Chart('${p.symbol}', '5m')">
-            📊 STAT2 Chart
-          </button>
+          <div class="binance-pnl-cell ${pnlClass}">
+            <span class="pnl-usd">${pnlSign}$${pnlUsd.toFixed(2)}</span>
+            <span class="pnl-roe">(${pnlSign}${roePct.toFixed(2)}%)</span>
+          </div>
+        </td>
+        <td>
+          <div style="font-size:10.5px; line-height:1.3;">
+            <span style="color:#0ECB81;">TP: $${formatPrice(p.tp1_price)}</span><br>
+            <span style="color:${p.is_be_moved ? '#00F0FF' : '#F6465D'};">SL: $${formatPrice(p.sl_price)}</span>
+          </div>
+        </td>
+        <td>
+          <button class="btn btn-danger btn-sm btn-close-market" data-id="${p.id}" title="Market Close Position">Close</button>
         </td>
       </tr>
     `;
   }).join('');
+
+  // Attach Market Close listener
+  document.querySelectorAll('.btn-close-market').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const posId = btn.dataset.id;
+      if (!confirm('Market Close this Binance Futures position immediately?')) return;
+      btn.disabled = true;
+      btn.textContent = 'Closing...';
+      const res = await fetch(`/api/positions/close/${posId}`, { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        await refreshAllData();
+      }
+    });
+  });
 }
 
 // ── 2. PENDING LIMIT ORDERS RENDERER ──
@@ -357,32 +398,32 @@ function renderLimitOrders() {
 
   if (!state.limitOrders || state.limitOrders.length === 0) {
     el.tbodyLimitOrders.innerHTML = `
-      <tr><td colspan="10" class="text-center empty-state">No pending limit orders. Fade traps will register here automatically...</td></tr>
+      <tr><td colspan="10" class="text-center empty-state">No open limit orders. Fade traps will register here automatically...</td></tr>
     `;
     return;
   }
 
   el.tbodyLimitOrders.innerHTML = state.limitOrders.map(sig => {
     const isLong = sig.direction === 'BUY';
-    const sideBadge = isLong ? '⚡ LIMIT BUY' : '⚡ LIMIT SELL';
+    const sideBadge = isLong ? 'LIMIT BUY' : 'LIMIT SELL';
     const distEntry = Math.abs(sig.entry_price - (sig.current_price || sig.entry_price)) / sig.entry_price * 100;
 
     return `
       <tr class="clickable-row">
-        <td style="font-weight: 800; color: #f8fafc;" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
-          ${sig.symbol} <span style="font-size:10px; color:#38bdf8;">(${sig.timeframe})</span>
+        <td style="font-weight: 800; color: #FFFFFF;" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
+          ${sig.symbol} <span style="font-size:10px; color:#F0B90B;">(${sig.timeframe})</span>
         </td>
-        <td><span class="sig-badge ${sig.direction}">${sideBadge}</span></td>
-        <td style="font-weight: 700; color: #38bdf8;">${formatPrice(sig.entry_price)}</td>
-        <td>${formatPrice(sig.entry_price)}</td>
-        <td><span style="color: #f59e0b; font-weight:700;">~${distEntry.toFixed(2)}% away</span></td>
-        <td style="color: #10b981;">${formatPrice(sig.tp1_price)} (+${sig.tp1_pct ? sig.tp1_pct.toFixed(1) : '1.8'}%)</td>
-        <td style="color: #06b6d4;">${formatPrice(sig.tp2_price)} (+${sig.tp2_pct ? sig.tp2_pct.toFixed(1) : '3.2'}%)</td>
-        <td style="color: #f43f5e;">${formatPrice(sig.sl_price)} (-${sig.sl_pct ? sig.sl_pct.toFixed(1) : '2.5'}%)</td>
+        <td><span class="binance-pos-side ${sig.direction}">${sideBadge}</span></td>
+        <td style="font-weight: 700; color: #F0B90B;">$${formatPrice(sig.entry_price)}</td>
+        <td>$${formatPrice(sig.entry_price)}</td>
+        <td><span style="color: #FCD535; font-weight:700;">~${distEntry.toFixed(2)}%</span></td>
+        <td style="color: #0ECB81;">$${formatPrice(sig.tp1_price)} (+${sig.tp1_pct ? sig.tp1_pct.toFixed(1) : '1.8'}%)</td>
+        <td style="color: #00F0FF;">$${formatPrice(sig.tp2_price)} (+${sig.tp2_pct ? sig.tp2_pct.toFixed(1) : '3.2'}%)</td>
+        <td style="color: #F6465D;">$${formatPrice(sig.sl_price)} (-${sig.sl_pct ? sig.sl_pct.toFixed(1) : '2.5'}%)</td>
         <td>$400.00</td>
         <td>
-          <button class="btn-stat2-view" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
-            📊 STAT2 Chart
+          <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
+            📊 Chart
           </button>
         </td>
       </tr>
@@ -390,7 +431,7 @@ function renderLimitOrders() {
   }).join('');
 }
 
-// ── 3. CLOSED POSITIONS RENDERER ──
+// ── 3. CLOSED POSITIONS RENDERER (ORDER HISTORY) ──
 function renderClosedPositions() {
   if (!el.tbodyClosedPositions) return;
 
@@ -403,28 +444,28 @@ function renderClosedPositions() {
 
   el.tbodyClosedPositions.innerHTML = state.closedPositions.map(p => {
     const isLong = p.direction === 'BUY';
-    const sideBadge = isLong ? '▲ LONG' : '▼ SHORT';
+    const sideBadge = isLong ? 'LONG' : 'SHORT';
     const pnlUsd = p.net_pnl_usd || 0;
-    const pnlPct = p.net_pnl_pct || 0;
+    const roePct = p.roe_pct !== undefined ? p.roe_pct : (p.initial_margin > 0 ? (pnlUsd / p.initial_margin) * 100 : (p.net_pnl_pct || 0));
     const pnlClass = pnlUsd >= 0 ? 'green' : 'red';
     const pnlSign = pnlUsd >= 0 ? '+' : '';
 
     return `
       <tr class="clickable-row">
-        <td style="font-weight: 800; color: #f8fafc;" onclick="openStat2Chart('${p.symbol}', '5m')">
-          ${p.symbol}
+        <td style="font-weight: 800; color: #FFFFFF;" onclick="openStat2Chart('${p.symbol}', '5m')">
+          ${p.symbol} <span class="binance-leverage-pill">${p.leverage || 20}x</span>
         </td>
-        <td><span class="sig-badge ${p.direction}">${sideBadge}</span></td>
-        <td>${formatPrice(p.entry_price)}</td>
-        <td>${formatPrice(p.current_price || p.entry_price)}</td>
+        <td><span class="binance-pos-side ${p.direction}">${sideBadge}</span></td>
+        <td>$${formatPrice(p.entry_price)}</td>
+        <td>$${formatPrice(p.current_price || p.entry_price)}</td>
         <td><span class="status-pill ${pnlUsd >= 0 ? 'active' : 'paused'}">${p.exit_reason || p.status}</span></td>
         <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)}</td>
-        <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}${pnlPct.toFixed(2)}%</td>
-        <td style="color:#64748b; font-size:11px;">${new Date(p.open_time).toLocaleTimeString()}</td>
-        <td style="color:#64748b; font-size:11px;">${p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-'}</td>
+        <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}${roePct.toFixed(2)}%</td>
+        <td style="color:#848E9C; font-size:10.5px;">${new Date(p.open_time).toLocaleTimeString()}</td>
+        <td style="color:#848E9C; font-size:10.5px;">${p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-'}</td>
         <td>
-          <button class="btn-stat2-view" onclick="openStat2Chart('${p.symbol}', '5m')">
-            📊 STAT2 Chart
+          <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${p.symbol}', '5m')">
+            📊 Chart
           </button>
         </td>
       </tr>
@@ -524,13 +565,14 @@ function renderWhitelist() {
 
         <div class="strategy-pill-list">
           ${strats.map(s => `
-            <div class="strategy-item-row">
+            <div class="strategy-item-row" style="background:#1E2329; border:1px solid #2B313A; border-radius:4px; padding:6px 8px; margin-top:4px; display:flex; justify-content:space-between; align-items:center;">
               <div class="strat-info">
-                <span class="strat-tf">${s.timeframe}</span>
-                <span style="font-weight: 600; color: #e2e8f0;">${s.strategy_name}</span>
-                <span style="font-size: 10px; color: #64748b;">(Risk: ${s.risk_pct}%)</span>
+                <span class="strat-tf" style="color:#F0B90B; font-weight:700;">${s.timeframe}</span>
+                <span style="font-weight:600; color:#FFFFFF; margin-left:4px;">${s.strategy_name}</span>
+                <span class="binance-leverage-pill">${s.leverage || 20}x ${s.margin_mode || 'ISOLATED'}</span>
+                <span style="font-size: 10px; color: #848E9C; margin-left:4px;">(Risk: ${s.risk_pct}%)</span>
               </div>
-              <div class="strat-actions">
+              <div class="strat-actions" style="display:flex; gap:4px;">
                 <button class="btn btn-sm btn-secondary" onclick="openEditStrategyModal('${s.id}')">⚙️</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteStrategy('${s.id}')">✕</button>
               </div>
@@ -548,13 +590,14 @@ function renderWhitelist() {
 
 function populateSettingsForm() {
   if (!el.formBotSettings) return;
-  el.cfgEquity.value = state.settings.account_equity || 1000;
-  el.cfgRiskPct.value = state.settings.default_risk_pct || 1.0;
-  el.cfgBufferLimit.value = state.settings.candle_buffer_limit || 1500;
-  el.cfgPaperMode.value = state.settings.paper_trading_mode || 1;
-  el.cfgTgToken.value = state.settings.telegram_bot_token || '';
-  el.cfgTgChatId.value = state.settings.telegram_chat_id || '';
-  el.cfgDiscordUrl.value = state.settings.discord_webhook_url || '';
+  if (el.cfgEquity) el.cfgEquity.value = state.settings.account_equity || 1000;
+  if (el.cfgDefaultLeverage) el.cfgDefaultLeverage.value = state.settings.default_leverage || '20';
+  if (el.cfgDefaultMarginMode) el.cfgDefaultMarginMode.value = state.settings.default_margin_mode || 'ISOLATED';
+  if (el.cfgRiskPct) el.cfgRiskPct.value = state.settings.default_risk_pct || 1.0;
+  if (el.cfgPaperMode) el.cfgPaperMode.value = state.settings.paper_trading_mode || 1;
+  if (el.cfgTgToken) el.cfgTgToken.value = state.settings.telegram_bot_token || '';
+  if (el.cfgTgChatId) el.cfgTgChatId.value = state.settings.telegram_chat_id || '';
+  if (el.cfgDiscordUrl) el.cfgDiscordUrl.value = state.settings.discord_webhook_url || '';
 }
 
 function populateBinanceSymbolsDatalist() {
@@ -765,6 +808,32 @@ async function loadChartData() {
         liqList: res.liqList || [],
         fvgList: res.fvgList || []
       };
+
+      if (res.candles && res.candles.length > 0) {
+        const last = res.candles[res.candles.length - 1];
+        const first = res.candles[0];
+        const changePct = ((last.close - first.open) / first.open) * 100;
+        const highs = res.candles.map(c => c.high);
+        const lows = res.candles.map(c => c.low);
+        const maxH = Math.max(...highs);
+        const minL = Math.min(...lows);
+        const totalVol = res.candles.reduce((s, c) => s + (c.volume || 0), 0);
+
+        if (el.tickerSymbolName) el.tickerSymbolName.textContent = `${sym} Perpetual`;
+        if (el.tickerMarkPrice) {
+          el.tickerMarkPrice.textContent = formatPrice(last.close);
+          el.tickerMarkPrice.style.color = changePct >= 0 ? '#0ECB81' : '#F6465D';
+        }
+        if (el.tickerChange24h) {
+          const sign = changePct >= 0 ? '+' : '';
+          el.tickerChange24h.className = `t-val ${changePct >= 0 ? 'green' : 'red'}`;
+          el.tickerChange24h.textContent = `${sign}${changePct.toFixed(2)}%`;
+        }
+        if (el.tickerHigh24h) el.tickerHigh24h.textContent = formatPrice(maxH);
+        if (el.tickerLow24h) el.tickerLow24h.textContent = formatPrice(minL);
+        if (el.tickerVol24h) el.tickerVol24h.textContent = `${(totalVol / 1000).toFixed(2)}K`;
+      }
+
       renderChartCanvas();
     }
   } catch (e) {

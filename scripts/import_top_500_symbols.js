@@ -81,11 +81,11 @@ async function importTop500Symbols(preFetchCandles = true) {
       const stratId5m = `strat_${sym.toLowerCase()}_5m_dual`;
       await DB.run(`
         INSERT INTO symbol_strategies (
-          id, symbol, strategy_name, strategy_type, timeframe, is_enabled, risk_pct,
+          id, symbol, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
           cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
           fvg_threshold_pct, swing_lookback, created_at, updated_at
         ) VALUES (
-          ?, ?, ?, 'dual', '5m', 1, 1.0,
+          ?, ?, ?, 'dual', '5m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
           14, 21, 14, 2.0, 0.35, 1.5,
           1.5, 30, ?, ?
         )
@@ -101,11 +101,11 @@ async function importTop500Symbols(preFetchCandles = true) {
       const stratId15m = `strat_${sym.toLowerCase()}_15m_dual`;
       await DB.run(`
         INSERT INTO symbol_strategies (
-          id, symbol, strategy_name, strategy_type, timeframe, is_enabled, risk_pct,
+          id, symbol, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
           cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
           fvg_threshold_pct, swing_lookback, created_at, updated_at
         ) VALUES (
-          ?, ?, ?, 'dual', '15m', 1, 1.0,
+          ?, ?, ?, 'dual', '15m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
           14, 21, 14, 2.0, 0.35, 1.5,
           1.5, 30, ?, ?
         )
