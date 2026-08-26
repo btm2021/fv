@@ -137,7 +137,7 @@ Cơ sở dữ liệu lưu tại `data/trading_system.db`, kích hoạt `PRAGMA j
 
 ## 6. REALTIME WEBSOCKET HUB & GIAO THỨC SỰ KIỆN
 
-Máy chủ WebSocket tích hợp sẵn trên cổng 8080 (cùng cổng HTTP), hỗ trợ tự động gửi các sự kiện:
+Máy chủ WebSocket tích hợp sẵn trên cổng 80 (cấu hình qua `.env`, cùng cổng HTTP), hỗ trợ tự động gửi các sự kiện:
 
 * `POSITIONS_UPDATE`: Broadcast khi có thay đổi trong danh sách vị thế hoặc số dư ví.
 * `SIGNALS_UPDATE` / `NEW_SIGNAL`: Broadcast tức thì khi Scanner phát hiện tín hiệu mới.

@@ -29,10 +29,10 @@ RUN mkdir -p /app/data
 
 # 7. Environment configuration optimized for 256MB Machine
 ENV NODE_ENV=production \
-    PORT=8080 \
+    PORT=80 \
     NODE_OPTIONS="--max-old-space-size=192"
 
-EXPOSE 8080
+EXPOSE 80
 
 # Start 24/7 Quantum Trading Hub Server
 CMD ["node", "server.js"]
