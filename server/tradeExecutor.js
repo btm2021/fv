@@ -1,15 +1,8 @@
 /**
  * Binance Futures Standard Trade Execution & Lifecycle Engine
  * 
- * Implements standard Binance Futures Mechanics:
- * - Configurable Leverage (1x to 125x, default 20x)
- * - Isolated & Cross Margin calculations
- * - Initial Margin & Maintenance Margin (MMR = 0.5%)
- * - Precise Liquidation Price computation & Real-Time Liquidation Trigger (LIQ_HIT)
- * - ROE % (Return on Equity based on Initial Margin)
- * - Binance VIP0 Taker Fee (0.05%) & Maker Fee (0.02%)
- * - Trailing SL to Breakeven (+0.05% covering fees) on TP1
- * - Target TP2 full exit with Maker fee
+ * Logs comprehensive Quantitative Features and Rationale vectors into SQLite
+ * for Machine Learning & Trading Forensics
  */
 const DB = require('./db');
 const logger = require('./logger');
@@ -24,7 +17,7 @@ class TradeExecutor {
   }
 
   /**
-   * Opens a Binance Futures position from a strategy signal
+   * Opens a Binance Futures position from a strategy signal with complete ML features
    */
   async openPositionFromSignal(signal) {
     const isPaper = (await DB.getSetting('paper_trading_mode', '1')) === '1';
@@ -114,6 +107,7 @@ class TradeExecutor {
       symbol: signal.symbol,
       strategy_id: signal.strategy_id,
       signal_id: signal.id,
+      signal_type: signal.signal_type || '',
       direction: signal.direction,
       leverage: leverage,
       margin_mode: marginMode,
@@ -126,6 +120,19 @@ class TradeExecutor {
       initial_margin: initialMargin,
       maintenance_margin: maintenanceMargin,
       liq_price: liqPrice,
+      cmo_val: signal.cmo_val || 0.0,
+      atr_val: signal.atr_val || 0.0,
+      atr_pct: signal.atr_pct || 0.0,
+      rr_ratio: signal.rr_ratio || 0.0,
+      nearest_liq_dist_pct: signal.nearest_liq_dist_pct || null,
+      danger_level: signal.danger_level || null,
+      market_regime: signal.market_regime || '',
+      side_rationale: signal.side_rationale || '',
+      entry_rationale: signal.entry_rationale || '',
+      tp1_rationale: signal.tp1_rationale || '',
+      tp2_rationale: signal.tp2_rationale || '',
+      sl_rationale: signal.sl_rationale || '',
+      features_json: signal.features_json || {},
       fee_usd: entryFee,
       entry_fee: entryFee,
       open_time: signal.timestamp || Date.now()
@@ -150,12 +157,15 @@ class TradeExecutor {
         return;
       }
 
+      const now = Date.now();
+
       for (const pos of activePositions) {
         const currentPrice = livePriceMap[pos.symbol] || pos.current_price;
         if (!currentPrice) continue;
 
         const isLong = pos.direction === 'BUY';
         let updates = { current_price: currentPrice };
+        const durationSec = Math.max(1, Math.round((now - (pos.open_time || now)) / 1000));
 
         // ── 1. LIQUIDATION CHECK (CRITICAL SAFETY) ──
         const isLiquidated = isLong ? (currentPrice <= pos.liq_price) : (currentPrice >= pos.liq_price);
@@ -166,7 +176,9 @@ class TradeExecutor {
 
           updates.status = 'LIQ_HIT';
           updates.is_liquidated = 1;
-          updates.close_time = Date.now();
+          updates.close_time = now;
+          updates.duration_seconds = durationSec;
+          updates.exit_price = currentPrice;
           updates.exit_reason = 'LIQUIDATED';
           updates.gross_pnl_usd = netPnlUsd;
           updates.fee_usd = totalFee;
@@ -204,7 +216,9 @@ class TradeExecutor {
           const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
           updates.status = 'TP2_HIT';
-          updates.close_time = Date.now();
+          updates.close_time = now;
+          updates.duration_seconds = durationSec;
+          updates.exit_price = pos.tp2_price;
           updates.exit_reason = 'TP2_HIT';
           updates.gross_pnl_usd = grossPnlUsd;
           updates.fee_usd = totalFee;
@@ -214,7 +228,7 @@ class TradeExecutor {
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] ${pos.symbol} [${pos.leverage}x] closed at TP2 (${pos.tp2_price}). Realized Net PnL: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
+          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] ${pos.symbol} [${pos.leverage}x] closed at TP2 (${pos.tp2_price}). Realized Net PnL: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE) | Duration: ${durationSec}s!`);
           continue;
         }
 
@@ -229,7 +243,9 @@ class TradeExecutor {
 
           const exitStatus = pos.is_be_moved ? 'BE_HIT' : 'SL_HIT';
           updates.status = exitStatus;
-          updates.close_time = Date.now();
+          updates.close_time = now;
+          updates.duration_seconds = durationSec;
+          updates.exit_price = pos.sl_price;
           updates.exit_reason = exitStatus;
           updates.gross_pnl_usd = grossPnlUsd;
           updates.fee_usd = totalFee;
@@ -240,7 +256,7 @@ class TradeExecutor {
 
           await DB.updatePosition(pos.id, updates);
           const icon = pos.is_be_moved ? '⚡' : '🛑';
-          logger.trade(exitStatus, `${icon} [${exitStatus}] ${pos.symbol} [${pos.leverage}x] closed at SL (${pos.sl_price}). Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct >= 0 ? '+' : ''}${roePct.toFixed(2)}% ROE)`);
+          logger.trade(exitStatus, `${icon} [${exitStatus}] ${pos.symbol} [${pos.leverage}x] closed at SL (${pos.sl_price}). Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct >= 0 ? '+' : ''}${roePct.toFixed(2)}% ROE) | Duration: ${durationSec}s`);
           continue;
         }
 
@@ -284,10 +300,14 @@ class TradeExecutor {
     const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
     const netPnlUsd = grossPnlUsd - totalFee;
     const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+    const now = Date.now();
+    const durationSec = Math.max(1, Math.round((now - (pos.open_time || now)) / 1000));
 
     const updates = {
       status: 'MANUAL_CLOSE',
-      close_time: Date.now(),
+      close_time: now,
+      duration_seconds: durationSec,
+      exit_price: closePrice,
       exit_reason: 'MANUAL_CLOSE',
       current_price: closePrice,
       gross_pnl_usd: grossPnlUsd,
@@ -299,7 +319,7 @@ class TradeExecutor {
     };
 
     await DB.updatePosition(posId, updates);
-    logger.trade('MANUAL_CLOSE', `🖐️ [MANUAL CLOSE] ${pos.symbol} [${pos.leverage}x] closed at market price ${closePrice}. Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
+    logger.trade('MANUAL_CLOSE', `🖐️ [MANUAL CLOSE] ${pos.symbol} [${pos.leverage}x] closed at market price ${closePrice}. Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE) | Duration: ${durationSec}s`);
     return updates;
   }
 }

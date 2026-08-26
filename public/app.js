@@ -191,9 +191,18 @@ function handleWsMessage(msg) {
     case 'POSITIONS_UPDATE':
       state.activePositions = (msg.data.positions || []).filter(p => p.status === 'ACTIVE');
       state.performance = msg.data.stats || {};
+      state.livePrices = msg.data.livePrices || {};
       renderActivePositions();
       updateHeaderMetrics();
       updateSubnavCounters();
+
+      // Real-time live price ticker for the currently active chart pair
+      if (state.chart.symbol && state.livePrices && state.livePrices[state.chart.symbol]) {
+        const liveP = state.livePrices[state.chart.symbol];
+        if (el.tickerMarkPrice) {
+          el.tickerMarkPrice.textContent = formatPrice(liveP);
+        }
+      }
       break;
 
     case 'SYSTEM_LOG':
@@ -370,7 +379,10 @@ function renderActivePositions() {
           </div>
         </td>
         <td>
-          <button class="btn btn-danger btn-sm btn-close-market" data-id="${p.id}" title="Market Close Position">Close</button>
+          <div style="display:flex; gap:4px; align-items:center;">
+            <button class="btn btn-secondary btn-sm" onclick="openPositionForensics('${p.id}')" title="Inspect Trade Rationale & ML Features">💡 Info</button>
+            <button class="btn btn-danger btn-sm btn-close-market" data-id="${p.id}" title="Market Close Position">Close</button>
+          </div>
         </td>
       </tr>
     `;
@@ -422,9 +434,9 @@ function renderLimitOrders() {
         <td style="color: #F6465D;">$${formatPrice(sig.sl_price)} (-${sig.sl_pct ? sig.sl_pct.toFixed(1) : '2.5'}%)</td>
         <td>$400.00</td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">
-            📊 Chart
-          </button>
+          <div style="display:flex; gap:4px;">
+            <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${sig.symbol}', '${sig.timeframe || '5m'}')">📊 Chart</button>
+          </div>
         </td>
       </tr>
     `;
@@ -457,16 +469,17 @@ function renderClosedPositions() {
         </td>
         <td><span class="binance-pos-side ${p.direction}">${sideBadge}</span></td>
         <td>$${formatPrice(p.entry_price)}</td>
-        <td>$${formatPrice(p.current_price || p.entry_price)}</td>
+        <td>$${formatPrice(p.exit_price || p.current_price || p.entry_price)}</td>
         <td><span class="status-pill ${pnlUsd >= 0 ? 'active' : 'paused'}">${p.exit_reason || p.status}</span></td>
         <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)}</td>
         <td style="font-weight: 700;" class="${pnlClass}">${pnlSign}${roePct.toFixed(2)}%</td>
         <td style="color:#848E9C; font-size:10.5px;">${new Date(p.open_time).toLocaleTimeString()}</td>
         <td style="color:#848E9C; font-size:10.5px;">${p.close_time ? new Date(p.close_time).toLocaleTimeString() : '-'}</td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${p.symbol}', '5m')">
-            📊 Chart
-          </button>
+          <div style="display:flex; gap:4px;">
+            <button class="btn btn-secondary btn-sm" onclick="openPositionForensics('${p.id}')" title="Inspect Rationale & ML Features">💡 Forensics</button>
+            <button class="btn btn-secondary btn-sm" onclick="openStat2Chart('${p.symbol}', '5m')">📊 Chart</button>
+          </div>
         </td>
       </tr>
     `;
@@ -757,36 +770,122 @@ function openDecisionModalFromFeed(index) {
     </div>
 
     <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.6;">
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #38bdf8;">
-        <div style="font-weight: 700; color: #38bdf8; font-size: 12px; margin-bottom: 4px;">1️⃣ TẠI SAO CHỌN SIDE & ĐIỂM ENTRY?</div>
-        <div style="color: #cbd5e1;">${sig.side_rationale || sig.rationale || 'Nến đóng cửa xác nhận xu hướng rõ nét, ATR đạt chuẩn biến động và vùng cản thông thoáng.'}</div>
+      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F0B90B;">
+        <div style="font-weight: 700; color: #F0B90B; font-size: 12px; margin-bottom: 4px;">📌 1️⃣ TẠI SAO CHỌN SIDE & ĐIỂM ENTRY?</div>
+        <div style="color: #EAECEF;">${sig.side_rationale || sig.rationale || 'Nến đóng cửa xác nhận xu hướng rõ nét, ATR đạt chuẩn biến động và vùng cản thông thoáng.'}</div>
+        ${sig.entry_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ vào lệnh:</b> ${sig.entry_rationale}</div>` : ''}
       </div>
 
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #10b981;">
-        <div style="font-weight: 700; color: #10b981; font-size: 12px; margin-bottom: 4px;">2️⃣ TẠI SAO CHỐT LỜI TẠI TP1 & TP2?</div>
-        <div style="color: #cbd5e1;">
-          • <b>TP1 (${formatPrice(sig.tp1_price)}):</b> Mép vùng FVG đối diện chưa lấp. 👉 <i>Tự động dời Stop-Loss về Hòa Vốn (Breakeven +0.05%) sau khi TP1 cắn.</i><br>
-          • <b>TP2 (${formatPrice(sig.tp2_price)}):</b> Cụm thanh khoản Liquidity Pool đối diện.
+      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #0ECB81;">
+        <div style="font-weight: 700; color: #0ECB81; font-size: 12px; margin-bottom: 4px;">🎯 2️⃣ TẠI SAO CHỐT LỜI TẠI TP1 & TP2?</div>
+        <div style="color: #EAECEF;">
+          • <b>TP1 (${formatPrice(sig.tp1_price)}):</b> ${sig.tp1_rationale || 'Mép vùng FVG đối diện chưa lấp. Tự động dời SL về Hòa Vốn (Breakeven +0.05%) sau khi chạm.'}<br>
+          • <b>TP2 (${formatPrice(sig.tp2_price)}):</b> ${sig.tp2_rationale || 'Cụm thanh khoản Liquidity Pool đối diện.'}
         </div>
       </div>
 
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #f43f5e;">
-        <div style="font-weight: 700; color: #f43f5e; font-size: 12px; margin-bottom: 4px;">3️⃣ TẠI SAO ĐẶT SL TẠI MỨC NÀY?</div>
-        <div style="color: #cbd5e1;">${sig.sl_rationale || 'Đặt dưới Swing Low/High gần nhất kèm biên độ an toàn, bảo vệ vị thế khỏi râu nến giật.'}</div>
+      <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F6465D;">
+        <div style="font-weight: 700; color: #F6465D; font-size: 12px; margin-bottom: 4px;">🛑 3️⃣ TẠI SAO ĐẶT SL TẠI MỨC NÀY?</div>
+        <div style="color: #EAECEF;">${sig.sl_rationale || 'Đặt dưới Swing Low/High gần nhất kèm biên độ an toàn, bảo vệ vị thế khỏi râu nến giật.'}</div>
       </div>
 
-      <div style="background: #111a2e; padding: 12px; border-radius: 8px; border-left: 3px solid #f59e0b;">
-        <div style="font-weight: 700; color: #f59e0b; font-size: 12px; margin-bottom: 4px;">4️⃣ CHỈ SỐ ĐỊNH LƯỢNG & RỦI RO:</div>
-        <div style="color: #cbd5e1; font-family: var(--font-mono); font-size: 12px;">
-          • Tỷ lệ Risk / Reward (R:R) : <b>1 : ${(sig.rr_ratio || 2.0).toFixed(2)}</b><br>
-          • Động cơ Biến động ATR    : <b>${(sig.atr_pct || 0.5).toFixed(2)}%</b> (Đạt chuẩn > 0.35%)<br>
-          • Thời gian Tín hiệu       : <b>${new Date(sig.timestamp * 1000).toLocaleString()}</b>
+      <div style="background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px;">
+        <div style="font-weight: 700; color: #00F0FF; font-size: 12px; margin-bottom: 4px;">🔬 4️⃣ CHỈ SỐ ĐỊNH LƯỢNG & FEATURES:</div>
+        <div style="color: #EAECEF; font-family: var(--font-mono); font-size: 11.5px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <div>• Risk / Reward (R:R): <b style="color:#F0B90B;">1 : ${(sig.rr_ratio || 2.0).toFixed(2)}</b></div>
+          <div>• ATR Volatility: <b style="color:#0ECB81;">${(sig.atr_pct || 0.5).toFixed(2)}%</b></div>
+          <div>• Market Regime: <b style="color:#FFFFFF;">${sig.market_regime || 'TREND'}</b></div>
+          <div>• Thời gian Tín hiệu: <b style="color:#848E9C;">${new Date(sig.timestamp * 1000).toLocaleTimeString()}</b></div>
         </div>
       </div>
     </div>
   `;
 
   el.modalTradeDecision.classList.add('active');
+}
+
+// ── MODAL POSITION FORENSICS & QUANTITATIVE FEATURES ──
+async function openPositionForensics(posId) {
+  try {
+    const res = await fetch(`/api/positions/${posId}/forensics`).then(r => r.json());
+    if (!res.success || !res.data) return;
+    const pos = res.data;
+    const isLong = pos.direction === 'BUY';
+    const sideBadge = pos.signal_type || (isLong ? '▲ LONG' : '▼ SHORT');
+    const badgeClass = isLong ? 'BUY' : 'SELL';
+
+    el.modalDecisionBadge.className = `status-badge-lg sig-badge ${badgeClass}`;
+    el.modalDecisionBadge.textContent = `${sideBadge} [${pos.leverage || 20}x ${pos.margin_mode || 'ISOLATED'}]`;
+    el.modalDecisionSymbol.textContent = `${pos.symbol} • Entry: $${formatPrice(pos.entry_price)}`;
+
+    const pnlSign = (pos.net_pnl_usd || 0) >= 0 ? '+' : '';
+    const pnlClass = (pos.net_pnl_usd || 0) >= 0 ? 'green' : 'red';
+    const roe = pos.roe_pct !== undefined ? pos.roe_pct : 0;
+    const durationStr = pos.duration_seconds ? `${pos.duration_seconds}s` : 'Active / Monitoring';
+
+    el.modalDecisionBody.innerHTML = `
+      <!-- SUMMARY STRIP -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px; text-align: center; font-family: var(--font-mono); margin-bottom: 16px;">
+        <div>
+          <div style="color: #848E9C; font-size: 10px; text-transform: uppercase;">Entry Price</div>
+          <div style="color: #FFFFFF; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.entry_price)}</div>
+        </div>
+        <div>
+          <div style="color: #0ECB81; font-size: 10px; text-transform: uppercase;">TP1 (50% + BE)</div>
+          <div style="color: #0ECB81; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.tp1_price)}</div>
+        </div>
+        <div>
+          <div style="color: #00F0FF; font-size: 10px; text-transform: uppercase;">TP2 Target</div>
+          <div style="color: #00F0FF; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.tp2_price)}</div>
+        </div>
+        <div>
+          <div style="color: #F6465D; font-size: 10px; text-transform: uppercase;">Stop Loss / Liq</div>
+          <div style="color: #F6465D; font-weight: 700; font-size: 13px; margin-top: 2px;">$${formatPrice(pos.sl_price)} <span style="color:#FFA500; font-size:10px;">($${formatPrice(pos.liq_price)})</span></div>
+        </div>
+      </div>
+
+      <!-- RATIONALE FORENSICS -->
+      <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12.5px; line-height: 1.6;">
+        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F0B90B;">
+          <div style="font-weight: 700; color: #F0B90B; margin-bottom: 4px; font-size: 11.5px;">📌 1. LÝ DO & ĐIỀU KIỆN VÀO LỆNH (ENTRY RATIONALE)</div>
+          <div style="color: #EAECEF;">${pos.side_rationale || pos.entry_rationale || 'Lệnh kích hoạt theo mô hình xác nhận xu hướng SMC + VIDYA Volatility Breakout.'}</div>
+          ${pos.entry_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ mức giá vào:</b> ${pos.entry_rationale}</div>` : ''}
+        </div>
+
+        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #0ECB81;">
+          <div style="font-weight: 700; color: #0ECB81; margin-bottom: 4px; font-size: 11.5px;">🎯 2. CĂN CỨ CÁC MỐC CHỐT LỜI (TP1 & TP2 RATIONALE)</div>
+          <div style="color: #EAECEF;">${pos.tp1_rationale || 'Chốt lời từng phần tại vùng FVG đối diện và tự động dời SL về hòa vốn (Breakeven).'}</div>
+          ${pos.tp2_rationale ? `<div style="color: #848E9C; margin-top: 4px; font-size: 11px;">👉 <b>Căn cứ TP2:</b> ${pos.tp2_rationale}</div>` : ''}
+        </div>
+
+        <div style="background: #14181F; padding: 12px; border-radius: 6px; border-left: 3px solid #F6465D;">
+          <div style="font-weight: 700; color: #F6465D; margin-bottom: 4px; font-size: 11.5px;">🛑 3. CĂN CỨ MỐC CẮT LỖ & AN TOÀN VỐN (STOP-LOSS & LIQUIDATION RATIONALE)</div>
+          <div style="color: #EAECEF;">${pos.sl_rationale || 'Cắt lỗ đặt ngoài vùng cấu trúc Swing Pivot để bảo vệ an toàn vốn.'}</div>
+          <div style="color: #FFA500; margin-top: 4px; font-size: 11px;">⚠️ <b>Giá thanh lý ước tính (Liquidation Price):</b> $${formatPrice(pos.liq_price)} (Ký quỹ: $${formatPrice(pos.initial_margin)} @ ${pos.leverage || 20}x).</div>
+        </div>
+
+        <!-- QUANTITATIVE ML FEATURES SNAPSHOT -->
+        <div style="background: #12161C; border: 1px solid #2B313A; padding: 12px; border-radius: 6px;">
+          <div style="font-weight: 700; color: #00F0FF; margin-bottom: 8px; font-size: 11.5px;">🔬 4. VECTOR ĐẶC TRƯNG ĐỊNH LƯỢNG TẠI THỜI ĐIỂM VÀO LỆNH (ML FEATURE VECTOR)</div>
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-family: var(--font-mono); font-size: 11px;">
+            <div><span style="color:#848E9C;">Market Regime:</span> <b style="color:#FFFFFF;">${pos.market_regime || 'TREND'}</b></div>
+            <div><span style="color:#848E9C;">ATR Volatility:</span> <b style="color:#0ECB81;">${(pos.atr_pct || 0).toFixed(2)}%</b></div>
+            <div><span style="color:#848E9C;">Risk/Reward (R:R):</span> <b style="color:#F0B90B;">1:${(pos.rr_ratio || 2.0).toFixed(1)}</b></div>
+            <div><span style="color:#848E9C;">Notional Size:</span> <b style="color:#FFFFFF;">$${formatPrice(pos.pos_size_usd)}</b></div>
+            <div><span style="color:#848E9C;">Initial Margin:</span> <b style="color:#FFFFFF;">$${formatPrice(pos.initial_margin)}</b></div>
+            <div><span style="color:#848E9C;">Leverage Mode:</span> <b style="color:#F0B90B;">${pos.leverage || 20}x ${pos.margin_mode || 'ISOLATED'}</b></div>
+            <div><span style="color:#848E9C;">Current PnL:</span> <b class="${pnlClass}">${pnlSign}$${(pos.net_pnl_usd || 0).toFixed(2)} (${pnlSign}${roe.toFixed(2)}%)</b></div>
+            <div><span style="color:#848E9C;">Status / Reason:</span> <b style="color:#00F0FF;">${pos.status} (${pos.exit_reason || 'RUNNING'})</b></div>
+            <div><span style="color:#848E9C;">Hold Duration:</span> <b style="color:#FFFFFF;">${durationStr}</b></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    el.modalTradeDecision.classList.add('active');
+  } catch (e) {
+    console.error('Forensics load error:', e);
+  }
 }
 
 // ── INTERACTIVE CHART VIEWER (STAT2 PRO BOX OVERLAY) ──

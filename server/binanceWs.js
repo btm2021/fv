@@ -2,6 +2,7 @@
  * Binance Futures WebSocket Real-Time Price Stream Manager
  * Subscribes to live market prices for all USDT pairs via `!miniTicker@arr`
  * Updates Active Positions, Unrealized PnL, and Trailing Stop-Loss in sub-second real-time
+ * Continuously streams real-time prices & position recalculations to the Web UI
  */
 const { WebSocket } = require('ws');
 const DB = require('./db');
@@ -16,7 +17,7 @@ class BinanceWsManager {
     this.reconnectTimer = null;
     this.isReconnecting = false;
     this.lastBroadcastTime = 0;
-    this.broadcastThrottleMs = 500; // Broadcast PnL updates to UI max 2 times/sec
+    this.broadcastThrottleMs = 300; // Broadcast live ticks to Web UI every 300ms for smooth real-time ticks
   }
 
   connect() {
@@ -47,7 +48,7 @@ class BinanceWsManager {
             }
           }
 
-          // Process active positions against live tick prices
+          // Process active positions & stream to Web UI
           await this.processLiveTicks();
 
         } catch (err) {
@@ -78,33 +79,22 @@ class BinanceWsManager {
 
   async processLiveTicks() {
     const activePositions = await DB.getActivePositions();
-    if (!activePositions || activePositions.length === 0) return;
-
-    // Check if any active position symbol has a live price update
-    let hasRelevantPriceUpdate = false;
-    for (const pos of activePositions) {
-      if (this.livePriceMap[pos.symbol]) {
-        hasRelevantPriceUpdate = true;
-        break;
-      }
+    if (activePositions && activePositions.length > 0) {
+      // Update active positions: checks TP1, TP2, SL, Breakeven Trailing, Liquidation Hits
+      await tradeExecutor.updateActivePositions(this.livePriceMap);
     }
 
-    if (!hasRelevantPriceUpdate) return;
-
-    // Update active positions: checks TP1, TP2, SL, Breakeven Trailing
-    await tradeExecutor.updateActivePositions(this.livePriceMap);
-
-    // Throttle UI broadcast to avoid flooding client WebSockets
+    // Throttle UI broadcast (every 300ms)
     const now = Date.now();
     if (now - this.lastBroadcastTime >= this.broadcastThrottleMs) {
       this.lastBroadcastTime = now;
-      const updatedPositions = await DB.getActivePositions();
+      const updatedPositions = activePositions && activePositions.length > 0 ? await DB.getActivePositions() : [];
       const stats = await DB.getPerformanceStats();
 
       notification.broadcast('POSITIONS_UPDATE', {
         positions: updatedPositions,
         stats: stats,
-        livePrices: this.getActivePriceSubset(updatedPositions)
+        livePrices: this.livePriceMap
       });
     }
   }

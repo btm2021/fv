@@ -1,5 +1,6 @@
 /**
  * SQLite3 Database Manager for 24/7 Binance Futures SMC Trading System
+ * Includes rich feature vector logging for Machine Learning & Strategy Optimization
  */
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
@@ -109,7 +110,7 @@ class DBManager {
 
       CREATE INDEX IF NOT EXISTS idx_candles_lookup ON ohlcv_candles(symbol, timeframe, timestamp DESC);
 
-      -- 5. Signals & Alerts Feed
+      -- 5. Signals & Alerts Feed (Rich ML Features & Rationale)
       CREATE TABLE IF NOT EXISTS signals_alerts (
         id TEXT PRIMARY KEY,
         symbol TEXT NOT NULL,
@@ -122,9 +123,20 @@ class DBManager {
         tp1_price REAL NOT NULL,
         tp2_price REAL NOT NULL,
         sl_price REAL NOT NULL,
+        cmo_val REAL,
+        atr_val REAL,
         atr_pct REAL,
         rr_ratio REAL,
+        nearest_liq_dist_pct REAL,
+        danger_level REAL,
+        market_regime TEXT,
+        side_rationale TEXT,
+        entry_rationale TEXT,
+        tp1_rationale TEXT,
+        tp2_rationale TEXT,
+        sl_rationale TEXT,
         rationale TEXT,
+        features_json TEXT,
         timestamp INTEGER NOT NULL,
         is_sent INTEGER DEFAULT 0,
         created_at INTEGER
@@ -132,18 +144,20 @@ class DBManager {
 
       CREATE INDEX IF NOT EXISTS idx_signals_time ON signals_alerts(timestamp DESC);
 
-      -- 6. Binance Futures Trade Positions
+      -- 6. Binance Futures Trade Positions (Complete Forensics & Quantitative Results)
       CREATE TABLE IF NOT EXISTS trade_positions (
         id TEXT PRIMARY KEY,
         symbol TEXT NOT NULL,
         strategy_id TEXT,
         signal_id TEXT,
+        signal_type TEXT,
         direction TEXT NOT NULL,
         status TEXT DEFAULT 'ACTIVE',
         leverage INTEGER DEFAULT 20,
         margin_mode TEXT DEFAULT 'ISOLATED',
         entry_price REAL NOT NULL,
         current_price REAL,
+        exit_price REAL,
         tp1_price REAL NOT NULL,
         tp2_price REAL NOT NULL,
         sl_price REAL NOT NULL,
@@ -155,6 +169,19 @@ class DBManager {
         liq_price REAL NOT NULL DEFAULT 0.0,
         margin_ratio REAL DEFAULT 0.0,
         roe_pct REAL DEFAULT 0.0,
+        cmo_val REAL,
+        atr_val REAL,
+        atr_pct REAL,
+        rr_ratio REAL,
+        nearest_liq_dist_pct REAL,
+        danger_level REAL,
+        market_regime TEXT,
+        side_rationale TEXT,
+        entry_rationale TEXT,
+        tp1_rationale TEXT,
+        tp2_rationale TEXT,
+        sl_rationale TEXT,
+        features_json TEXT,
         is_tp1_hit INTEGER DEFAULT 0,
         is_be_moved INTEGER DEFAULT 0,
         is_liquidated INTEGER DEFAULT 0,
@@ -167,6 +194,7 @@ class DBManager {
         net_pnl_pct REAL DEFAULT 0.0,
         open_time INTEGER NOT NULL,
         close_time INTEGER,
+        duration_seconds INTEGER DEFAULT 0,
         exit_reason TEXT,
         created_at INTEGER,
         updated_at INTEGER
@@ -184,21 +212,25 @@ class DBManager {
   }
 
   async applyMigrations() {
-    // Check & dynamically add missing columns for existing databases
+    // Dynamically add missing feature & rationale columns for existing SQLite DBs
     const safeAddColumn = async (table, colDef) => {
       try {
         await this.run(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
       } catch (e) {
-        // Column likely exists
+        // Column already exists
       }
     };
 
+    // Strategies table
     await safeAddColumn('symbol_strategies', 'leverage INTEGER DEFAULT 20');
     await safeAddColumn('symbol_strategies', "margin_mode TEXT DEFAULT 'ISOLATED'");
     await safeAddColumn('symbol_strategies', "order_type TEXT DEFAULT 'MARKET'");
 
+    // Positions table - Binance & ML Features
+    await safeAddColumn('trade_positions', 'signal_type TEXT');
     await safeAddColumn('trade_positions', 'leverage INTEGER DEFAULT 20');
     await safeAddColumn('trade_positions', "margin_mode TEXT DEFAULT 'ISOLATED'");
+    await safeAddColumn('trade_positions', 'exit_price REAL');
     await safeAddColumn('trade_positions', 'initial_margin REAL DEFAULT 0.0');
     await safeAddColumn('trade_positions', 'maintenance_margin REAL DEFAULT 0.0');
     await safeAddColumn('trade_positions', 'liq_price REAL DEFAULT 0.0');
@@ -208,6 +240,35 @@ class DBManager {
     await safeAddColumn('trade_positions', 'entry_fee REAL DEFAULT 0.0');
     await safeAddColumn('trade_positions', 'exit_fee REAL DEFAULT 0.0');
     await safeAddColumn('trade_positions', 'funding_fee REAL DEFAULT 0.0');
+    await safeAddColumn('trade_positions', 'duration_seconds INTEGER DEFAULT 0');
+    
+    // Quantitative rationale & features columns
+    await safeAddColumn('trade_positions', 'cmo_val REAL');
+    await safeAddColumn('trade_positions', 'atr_val REAL');
+    await safeAddColumn('trade_positions', 'atr_pct REAL');
+    await safeAddColumn('trade_positions', 'rr_ratio REAL');
+    await safeAddColumn('trade_positions', 'nearest_liq_dist_pct REAL');
+    await safeAddColumn('trade_positions', 'danger_level REAL');
+    await safeAddColumn('trade_positions', 'market_regime TEXT');
+    await safeAddColumn('trade_positions', 'side_rationale TEXT');
+    await safeAddColumn('trade_positions', 'entry_rationale TEXT');
+    await safeAddColumn('trade_positions', 'tp1_rationale TEXT');
+    await safeAddColumn('trade_positions', 'tp2_rationale TEXT');
+    await safeAddColumn('trade_positions', 'sl_rationale TEXT');
+    await safeAddColumn('trade_positions', 'features_json TEXT');
+
+    // Signals table features
+    await safeAddColumn('signals_alerts', 'cmo_val REAL');
+    await safeAddColumn('signals_alerts', 'atr_val REAL');
+    await safeAddColumn('signals_alerts', 'nearest_liq_dist_pct REAL');
+    await safeAddColumn('signals_alerts', 'danger_level REAL');
+    await safeAddColumn('signals_alerts', 'market_regime TEXT');
+    await safeAddColumn('signals_alerts', 'side_rationale TEXT');
+    await safeAddColumn('signals_alerts', 'entry_rationale TEXT');
+    await safeAddColumn('signals_alerts', 'tp1_rationale TEXT');
+    await safeAddColumn('signals_alerts', 'tp2_rationale TEXT');
+    await safeAddColumn('signals_alerts', 'sl_rationale TEXT');
+    await safeAddColumn('signals_alerts', 'features_json TEXT');
   }
 
   async seedDefaults() {
@@ -370,16 +431,18 @@ class DBManager {
     return rows.reverse();
   }
 
-  // ── SIGNALS & ALERTS ──
+  // ── SIGNALS & ALERTS FEED ──
   async saveSignal(signal) {
     const id = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = Date.now();
     await this.run(`
       INSERT INTO signals_alerts (
         id, symbol, strategy_id, strategy_name, timeframe, signal_type, direction,
-        entry_price, tp1_price, tp2_price, sl_price, atr_pct, rr_ratio, rationale,
+        entry_price, tp1_price, tp2_price, sl_price, cmo_val, atr_val, atr_pct, rr_ratio,
+        nearest_liq_dist_pct, danger_level, market_regime, side_rationale, entry_rationale,
+        tp1_rationale, tp2_rationale, sl_rationale, rationale, features_json,
         timestamp, is_sent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `, [
       id,
       signal.symbol,
@@ -392,10 +455,21 @@ class DBManager {
       signal.tp1_price,
       signal.tp2_price,
       signal.sl_price,
+      signal.cmo_val || 0,
+      signal.atr_val || 0,
       signal.atr_pct || 0,
       signal.rr_ratio || 0,
-      signal.rationale || '',
-      signal.timestamp,
+      signal.nearest_liq_dist_pct || null,
+      signal.danger_level || null,
+      signal.market_regime || '',
+      signal.side_rationale || '',
+      signal.entry_rationale || '',
+      signal.tp1_rationale || '',
+      signal.tp2_rationale || '',
+      signal.sl_rationale || '',
+      signal.rationale || signal.side_rationale || '',
+      typeof signal.features_json === 'object' ? JSON.stringify(signal.features_json) : (signal.features_json || '{}'),
+      signal.timestamp || now,
       now
     ]);
     return id;
@@ -405,33 +479,40 @@ class DBManager {
     return await this.all('SELECT * FROM signals_alerts ORDER BY timestamp DESC LIMIT ?', [limit]);
   }
 
-  // ── BINANCE FUTURES POSITIONS ──
+  // ── BINANCE FUTURES POSITIONS & MACHINE LEARNING DATASET ──
   async createPosition(pos) {
     const id = `pos_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = Date.now();
     await this.run(`
       INSERT INTO trade_positions (
-        id, symbol, strategy_id, signal_id, direction, status,
+        id, symbol, strategy_id, signal_id, signal_type, direction, status,
         leverage, margin_mode, entry_price, current_price,
         tp1_price, tp2_price, sl_price, original_sl,
         pos_size_usd, quantity, initial_margin, maintenance_margin,
-        liq_price, margin_ratio, roe_pct, is_tp1_hit, is_be_moved,
-        is_liquidated, gross_pnl_usd, fee_usd, entry_fee, exit_fee,
-        funding_fee, net_pnl_usd, net_pnl_pct, open_time, created_at, updated_at
+        liq_price, margin_ratio, roe_pct, cmo_val, atr_val, atr_pct, rr_ratio,
+        nearest_liq_dist_pct, danger_level, market_regime,
+        side_rationale, entry_rationale, tp1_rationale, tp2_rationale, sl_rationale,
+        features_json, is_tp1_hit, is_be_moved, is_liquidated,
+        gross_pnl_usd, fee_usd, entry_fee, exit_fee, funding_fee,
+        net_pnl_usd, net_pnl_pct, open_time, created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, 'ACTIVE',
+        ?, ?, ?, ?, ?, ?, 'ACTIVE',
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, 0.0, 0.0, 0, 0,
-        0, 0.0, ?, ?, 0.0,
-        0.0, 0.0, 0.0, ?, ?, ?
+        ?, 0.0, 0.0, ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, 0, 0, 0,
+        0.0, ?, ?, 0.0, 0.0,
+        0.0, 0.0, ?, ?, ?
       )
     `, [
       id,
       pos.symbol,
       pos.strategy_id || '',
       pos.signal_id || '',
+      pos.signal_type || '',
       pos.direction,
       pos.leverage || 20,
       pos.margin_mode || 'ISOLATED',
@@ -446,6 +527,19 @@ class DBManager {
       pos.initial_margin || (pos.pos_size_usd / (pos.leverage || 20)),
       pos.maintenance_margin || (pos.pos_size_usd * 0.005),
       pos.liq_price || 0.0,
+      pos.cmo_val || 0.0,
+      pos.atr_val || 0.0,
+      pos.atr_pct || 0.0,
+      pos.rr_ratio || 0.0,
+      pos.nearest_liq_dist_pct || null,
+      pos.danger_level || null,
+      pos.market_regime || '',
+      pos.side_rationale || '',
+      pos.entry_rationale || '',
+      pos.tp1_rationale || '',
+      pos.tp2_rationale || '',
+      pos.sl_rationale || '',
+      typeof pos.features_json === 'object' ? JSON.stringify(pos.features_json) : (pos.features_json || '{}'),
       pos.fee_usd || 0.0,
       pos.entry_fee || pos.fee_usd || 0.0,
       pos.open_time || now,
@@ -457,6 +551,10 @@ class DBManager {
 
   async getActivePositions() {
     return await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE' ORDER BY open_time DESC");
+  }
+
+  async getPositionById(id) {
+    return await this.get('SELECT * FROM trade_positions WHERE id = ?', [id]);
   }
 
   async updatePosition(posId, updates) {

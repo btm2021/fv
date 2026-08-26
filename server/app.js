@@ -237,6 +237,24 @@ app.post('/api/positions/close/:id', async (req, res) => {
   }
 });
 
+// 5b2. Get Trade Forensics & Quantitative Features
+app.get('/api/positions/:id/forensics', async (req, res) => {
+  try {
+    const pos = await DB.getPositionById(req.params.id);
+    if (!pos) return res.status(404).json({ success: false, error: 'Position record not found.' });
+    if (pos.features_json && typeof pos.features_json === 'string') {
+      try {
+        pos.features = JSON.parse(pos.features_json);
+      } catch (e) {
+        pos.features = {};
+      }
+    }
+    res.json({ success: true, data: pos });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 5c. Adjust Strategy Leverage / Margin Mode
 app.post('/api/positions/leverage', async (req, res) => {
   const { symbol, timeframe, leverage, margin_mode } = req.body;
