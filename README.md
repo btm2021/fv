@@ -36,7 +36,7 @@ Hệ thống được tài liệu hóa đầy đủ và chi tiết tại các t�
 * **Xuất báo cáo JSON:** Tải file `.json` chi tiết từng entry/exit, features định lượng, ghi chú cá nhân và forensics để phân tích chuyên sâu.
 
 ### 4. 🔴 Trang Giám Sát Livestream & Mobile (Livestream Entry Monitor)
-* **URL Trực Tiếp:** 👉 **`http://localhost/livestream`** (hoặc `http://localhost:80/livestream`)
+* **URL Trực Tiếp:** 👉 **`http://localhost:8080/livestream`**
 * Thiết kế tối ưu cho **Livestream OBS Studio / Browser Capture** và **Thiết bị Di động (Mobile Responsive)**.
 * **Theo dõi vị thế mở (Active Positions):** Thẻ thông tin trực quan, PnL phát sáng xanh/đỏ thời gian thực, tiến trình TP/SL.
 * **Bộ sắp xếp PnL thông minh (PnL Sorter):** Lọc và sắp xếp theo PnL Lãi nhất ➔ Thấp nhất, Lỗ nhất ➔ Cao nhất, ROE %, Size lệnh, Thời gian.
@@ -59,7 +59,7 @@ Hệ thống được tài liệu hóa đầy đủ và chi tiết tại các t�
 ## 🚀 KHỞI CHẠY HỆ THỐNG
 
 1. **Truy cập Giao Diện Người Dùng:**
-   👉 Mở trình duyệt tại: **`http://localhost`** (Cổng 80 mặc định cấu hình tại `.env`)
+   👉 Mở trình duyệt tại: **`http://localhost:8080`** (Cổng 8080 cấu hình tại `.env`)
 2. **Biên dịch Frontend (khi có thay đổi JSX):**
    ```bash
    node scripts/build.js

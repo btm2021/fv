@@ -93,80 +93,85 @@ class ExchangeWorker {
     }
 
     this.isPacing = true;
-    const now = Date.now();
+    try {
+      const now = Date.now();
 
-    // Bucket transition (every 60s)
-    const elapsedBucketSec = (now - this.bucketStartTime) / 1000;
-    if (elapsedBucketSec >= 60 || this.bucketProgress >= this.TASKS_PER_BUCKET) {
-      this.currentBucket = (this.currentBucket + 1) % this.TOTAL_BUCKETS;
-      this.bucketProgress = 0;
-      this.bucketStartTime = now;
+      // Bucket transition (every 60s)
+      const elapsedBucketSec = (now - this.bucketStartTime) / 1000;
+      if (elapsedBucketSec >= 60 || this.bucketProgress >= this.TASKS_PER_BUCKET) {
+        this.currentBucket = (this.currentBucket + 1) % this.TOTAL_BUCKETS;
+        this.bucketProgress = 0;
+        this.bucketStartTime = now;
 
-      if (this.currentBucket === 0) {
-        this.stats.totalCyclesCompleted++;
-        this.cycleStartTime = now;
-        logger.info('SCANNER', `🔄 [${this.exchange}] COMPLETED 5-MIN SCAN CYCLE (${this.taskQueue.length} TASKS) ➔ STARTING NEW CYCLE`);
-      }
-    }
-
-    const batchSize = Math.min(this.MICRO_BATCH_SIZE, this.taskQueue.length);
-    const batch = [];
-    for (let i = 0; i < batchSize; i++) {
-      batch.push(this.taskQueue[this.currentTaskIndex]);
-      this.currentTaskIndex = (this.currentTaskIndex + 1) % this.taskQueue.length;
-    }
-
-    const targetBuffer = Number(await DB.getSetting('candle_buffer_limit', '1500')) || 1500;
-
-    await Promise.all(batch.map(async (task) => {
-      if (!task) return;
-      try {
-        const candles = await this.adapter.syncCandles(task.symbol, task.timeframe, targetBuffer);
-        if (!candles || candles.length < 35) {
-          logger.warn('SCAN', `⚠️ [${this.exchange}] Fetch ${task.symbol} (${task.timeframe}): Không đủ dữ liệu nến (${candles ? candles.length : 0}/35) để phân tích.`);
-          return;
+        if (this.currentBucket === 0) {
+          this.stats.totalCyclesCompleted++;
+          this.cycleStartTime = now;
+          logger.info('SCANNER', `🔄 [${this.exchange}] COMPLETED 5-MIN SCAN CYCLE (${this.taskQueue.length} TASKS) ➔ STARTING NEW CYCLE`);
         }
+      }
 
-        let foundAnySignal = false;
-        for (const strat of task.strats) {
-          const signalResult = strategyEngine.evaluate(candles, strat);
-          if (signalResult) {
-            foundAnySignal = true;
-            signalResult.exchange = this.exchange;
+      const batchSize = Math.min(this.MICRO_BATCH_SIZE, this.taskQueue.length);
+      const batch = [];
+      for (let i = 0; i < batchSize; i++) {
+        batch.push(this.taskQueue[this.currentTaskIndex]);
+        this.currentTaskIndex = (this.currentTaskIndex + 1) % this.taskQueue.length;
+      }
 
-            const existing = await DB.get(`
-              SELECT id FROM signals_alerts
-              WHERE symbol = ? AND strategy_id = ? AND timestamp = ? AND exchange = ?
-            `, [signalResult.symbol, signalResult.strategy_id, signalResult.timestamp, this.exchange]);
+      const targetBuffer = Number(await DB.getSetting('candle_buffer_limit', '1500')) || 1500;
 
-            if (!existing) {
-              const sigId = await DB.saveSignal(signalResult);
-              signalResult.id = sigId;
-              this.stats.totalSignalsFound++;
+      await Promise.all(batch.map(async (task) => {
+        if (!task) return;
+        try {
+          const candles = await this.adapter.syncCandles(task.symbol, task.timeframe, targetBuffer);
+          if (!candles || candles.length < 35) {
+            logger.warn('SCAN', `⚠️ [${this.exchange}] Fetch ${task.symbol} (${task.timeframe}): Không đủ dữ liệu nến (${candles ? candles.length : 0}/35) để phân tích.`);
+            return;
+          }
 
-              logger.signal('SIGNAL', `🔥 [${this.exchange} SIGNAL] ${signalResult.symbol} (${signalResult.timeframe}) -> ${signalResult.signal_type} (${signalResult.direction}) | Entry: ${signalResult.entry_price} | TP1: ${signalResult.tp1_price} | TP2: ${signalResult.tp2_price} | SL: ${signalResult.sl_price}`);
+          let foundAnySignal = false;
+          for (const strat of task.strats) {
+            const signalResult = strategyEngine.evaluate(candles, strat);
+            if (signalResult) {
+              foundAnySignal = true;
+              signalResult.exchange = this.exchange;
 
-              await tradeExecutor.openPositionFromSignal(signalResult);
-              await notification.sendSignalAlert(signalResult);
+              const existing = await DB.get(`
+                SELECT id FROM signals_alerts
+                WHERE symbol = ? AND strategy_id = ? AND timestamp = ? AND exchange = ?
+              `, [signalResult.symbol, signalResult.strategy_id, signalResult.timestamp, this.exchange]);
+
+              if (!existing) {
+                const sigId = await DB.saveSignal(signalResult);
+                signalResult.id = sigId;
+                this.stats.totalSignalsFound++;
+
+                logger.signal('SIGNAL', `🔥 [${this.exchange} SIGNAL] ${signalResult.symbol} (${signalResult.timeframe}) -> ${signalResult.signal_type} (${signalResult.direction}) | Entry: ${signalResult.entry_price} | TP1: ${signalResult.tp1_price} | TP2: ${signalResult.tp2_price} | SL: ${signalResult.sl_price}`);
+
+                await tradeExecutor.openPositionFromSignal(signalResult);
+                await notification.sendSignalAlert(signalResult);
+              }
             }
           }
-        }
 
-        // Báo cáo nếu symbol đã xử lý nhưng không phát hiện tín hiệu
-        if (!foundAnySignal) {
-          const lastCandle = candles[candles.length - 1];
-          logger.info('SCAN', `⚪ [${this.exchange}] ${task.symbol} (${task.timeframe}) [${candles.length} nến | Giá: $${lastCandle.close}]: Đã phân tích SMC/ATR ➔ Không phát hiện tín hiệu vào lệnh.`);
+          // Báo cáo nếu symbol đã xử lý nhưng không phát hiện tín hiệu
+          if (!foundAnySignal) {
+            const lastCandle = candles[candles.length - 1];
+            logger.info('SCAN', `⚪ [${this.exchange}] ${task.symbol} (${task.timeframe}) [${candles.length} nến | Giá: $${lastCandle.close}]: Đã phân tích SMC/ATR ➔ Không phát hiện tín hiệu vào lệnh.`);
+          }
+        } catch (err) {
+          logger.error('SCAN', `❌ [${this.exchange}] ${task.symbol} (${task.timeframe}) lỗi xử lý: ${err.message}`);
         }
-      } catch (err) {
-        logger.error('SCAN', `❌ [${this.exchange}] ${task.symbol} (${task.timeframe}) lỗi xử lý: ${err.message}`);
-      }
-    }));
+      }));
 
-    this.bucketProgress += batch.length;
-    this.stats.totalTasksExecuted += batch.length;
-    this.stats.currentBucket = this.currentBucket + 1;
-    this.stats.bucketProgress = this.bucketProgress;
-    this.isPacing = false;
+      this.bucketProgress += batch.length;
+      this.stats.totalTasksExecuted += batch.length;
+      this.stats.currentBucket = this.currentBucket + 1;
+      this.stats.bucketProgress = this.bucketProgress;
+    } catch (err) {
+      logger.error('SCANNER', `[${this.exchange}] Batch error: ${err.message}`);
+    } finally {
+      this.isPacing = false;
+    }
   }
 }
 

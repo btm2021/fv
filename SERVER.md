@@ -25,7 +25,7 @@ Tài liệu này mô tả chi tiết toàn bộ kiến trúc máy chủ **Node.j
                                 │ REST APIs (HTTP)            │ Realtime WebSockets (WSS)
                                 ▼                             ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   EXPRESS SERVER (PORT 80 / .env)                            │
+│                                  EXPRESS SERVER (PORT 8080 / .env)                          │
 │                     server.js / server/app.js / server/notification.js                      │
 ├───────────────────────────────┬─────────────────────────────┬───────────────────────────────┤
 │    SCANNER & RATE PACING      │       STRATEGY ENGINE       │        TRADE EXECUTOR         │
@@ -137,7 +137,7 @@ Cơ sở dữ liệu lưu tại `data/trading_system.db`, kích hoạt `PRAGMA j
 
 ## 6. REALTIME WEBSOCKET HUB & GIAO THỨC SỰ KIỆN
 
-Máy chủ WebSocket tích hợp sẵn trên cổng 80 (cấu hình qua `.env`, cùng cổng HTTP), hỗ trợ tự động gửi các sự kiện:
+Máy chủ WebSocket tích hợp sẵn trên cổng 8080 (cấu hình qua `.env`, cùng cổng HTTP), hỗ trợ tự động gửi các sự kiện:
 
 * `POSITIONS_UPDATE`: Broadcast khi có thay đổi trong danh sách vị thế hoặc số dư ví.
 * `SIGNALS_UPDATE` / `NEW_SIGNAL`: Broadcast tức thì khi Scanner phát hiện tín hiệu mới.

@@ -4,7 +4,7 @@
 > **QUY TẮC BẮT BUỘC & KHÔNG ĐƯỢC PHÉP VI PHẠM (CRITICAL SYSTEM CONSTRAINTS):**
 > 1. **KHÔNG ĐƯỢC DỪNG / KILL CÁC NODEJS PROCESS ĐANG CHẠY TRÊN MÁY NÀY.**
 > 2. **KHÔNG ĐƯỢC TỰ Ý CHẠY `git push`.**
-> 3. **KHÔNG ĐƯỢC CHẠY LỆNH `npm run start` (Server đang chạy nền liên tục; cấu hình cổng nằm tại file `.env`, mặc định port 80).**
+> 3. **KHÔNG ĐƯỢC CHẠY LỆNH `npm run start` (Server đang chạy nền liên tục; cấu hình cổng nằm tại file `.env`, mặc định port 8080).**
 
 ---
 
@@ -31,7 +31,7 @@ Khi sửa đổi giao diện hoặc logic người dùng trong `public/app.jsx`:
    ```bash
    node -e "const fs = require('fs'); new Function(fs.readFileSync('public/app.js', 'utf8')); console.log('OK');"
    ```
-4. Người dùng chỉ cần ấn **F5** trên trình duyệt để thấy thay đổi tại `http://localhost` (hoặc `http://localhost:80`).
+4. Người dùng chỉ cần ấn **F5** trên trình duyệt để thấy thay đổi tại `http://localhost:8080`.
 
 ---
 
