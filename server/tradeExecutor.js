@@ -61,8 +61,8 @@ class TradeExecutor {
         return null;
       }
 
-      // 3. If price slipped more than 0.5% from signal entry, REJECT
-      if (slippage > 0.005) {
+      // 3. If price slipped more than 1.5% from signal entry, REJECT
+      if (slippage > 0.015) {
         logger.warn('TRADE', `⚠️ [REJECTED] ${signal.symbol} (${exchangeId}) live price ($${livePrice}) slipped ${(slippage * 100).toFixed(2)}% from entry.`);
         return null;
       }
@@ -130,8 +130,7 @@ class TradeExecutor {
       sl_rationale: signal.sl_rationale || '',
       features_json: signal.features_json || {},
       fee_usd: entryFee,
-      entry_fee: entryFee,
-      open_time: signal.timestamp || Date.now()
+      open_time: (signal.timestamp ? (signal.timestamp < 10000000000 ? signal.timestamp * 1000 : signal.timestamp) : Date.now())
     });
 
     const sideTag = isLong ? '▲ LONG' : '▼ SHORT';

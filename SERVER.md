@@ -25,7 +25,7 @@ Tài liệu này mô tả chi tiết toàn bộ kiến trúc máy chủ **Node.j
                                 │ REST APIs (HTTP)            │ Realtime WebSockets (WSS)
                                 ▼                             ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   EXPRESS SERVER (PORT 8080)                                │
+│                                   EXPRESS SERVER (PORT 80 / .env)                            │
 │                     server.js / server/app.js / server/notification.js                      │
 ├───────────────────────────────┬─────────────────────────────┬───────────────────────────────┤
 │    SCANNER & RATE PACING      │       STRATEGY ENGINE       │        TRADE EXECUTOR         │

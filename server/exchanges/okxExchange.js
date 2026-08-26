@@ -20,10 +20,10 @@ class OkxExchangeAdapter extends BaseExchangeAdapter {
       mmrRate: 0.005,       // 0.5% MMR
       minRequestIntervalMs: 150,
       pacingConfig: {
-        tasksPerBucket: 80,
-        microBatchSize: 4,
-        tickIntervalMs: 3000,
-        ratePerMin: 80,
+        tasksPerBucket: 200,
+        microBatchSize: 10,
+        tickIntervalMs: 1500,
+        ratePerMin: 400,
         totalBuckets: 5
       }
     });

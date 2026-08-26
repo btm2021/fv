@@ -1,8 +1,28 @@
+// Native .env file loader
+const fs = require('fs');
+const path = require('path');
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  try {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    envContent.split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        const [key, ...values] = trimmed.split('=');
+        if (key) {
+          const val = values.join('=').trim().replace(/^["']|["']$/g, '');
+          process.env[key.trim()] = val;
+        }
+      }
+    });
+  } catch (e) {}
+}
+
 const { server } = require('./server/app');
 const scanner = require('./server/scanner');
 const binanceWs = require('./server/binanceWs');
 
-const PORT = process.env.PORT || 8080;
+const PORT = parseInt(process.env.PORT, 10) || 80;
 
 server.listen(PORT, () => {
   console.log(`\n══════════════════════════════════════════════════════════════════════`);

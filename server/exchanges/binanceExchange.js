@@ -20,10 +20,10 @@ class BinanceExchangeAdapter extends BaseExchangeAdapter {
       mmrRate: 0.005,       // 0.5% MMR
       minRequestIntervalMs: 120,
       pacingConfig: {
-        tasksPerBucket: 200,
-        microBatchSize: 10,
-        tickIntervalMs: 3000,
-        ratePerMin: 200,
+        tasksPerBucket: 250,
+        microBatchSize: 15,
+        tickIntervalMs: 1500,
+        ratePerMin: 600,
         totalBuckets: 5
       }
     });

@@ -18,10 +18,10 @@ class BingXExchangeAdapter extends BaseExchangeAdapter {
       mmrRate: 0.005,        // 0.5% MMR
       minRequestIntervalMs: 120,
       pacingConfig: {
-        tasksPerBucket: 100,
-        microBatchSize: 6,
-        tickIntervalMs: 3000,
-        ratePerMin: 120,
+        tasksPerBucket: 250,
+        microBatchSize: 12,
+        tickIntervalMs: 1500,
+        ratePerMin: 480,
         totalBuckets: 5
       }
     });
@@ -127,11 +127,11 @@ class BingXExchangeAdapter extends BaseExchangeAdapter {
     const rawSym = sym.includes('-') ? sym : (sym.endsWith('USDT') ? `${sym.substring(0, sym.length - 4)}-USDT` : sym);
     const interval = this.mapTimeframe(timeframe);
     const limit = Math.min(targetBuffer, 1000);
-    const url = `${BINGX_API_BASE}/openApi/swap/v2/market/kline?symbol=${rawSym}&interval=${interval}&limit=${limit}`;
+    const url = `${BINGX_API_BASE}/openApi/swap/v3/quote/klines?symbol=${rawSym}&interval=${interval}&limit=${limit}`;
 
     try {
       const res = await this.fetchWithRateLimit(url);
-      if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
+      if (res && res.code === 0 && Array.isArray(res.data) && res.data.length > 0) {
         return res.data.map(k => ({
           time: Math.floor(parseInt(k.time, 10) / 1000),
           open: parseFloat(k.open),

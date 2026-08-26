@@ -18,10 +18,10 @@ class BitgetExchangeAdapter extends BaseExchangeAdapter {
       mmrRate: 0.005,        // 0.5% MMR
       minRequestIntervalMs: 100,
       pacingConfig: {
-        tasksPerBucket: 100,
-        microBatchSize: 6,
-        tickIntervalMs: 3000,
-        ratePerMin: 120,
+        tasksPerBucket: 250,
+        microBatchSize: 12,
+        tickIntervalMs: 1500,
+        ratePerMin: 480,
         totalBuckets: 5
       }
     });
