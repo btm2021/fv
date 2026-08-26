@@ -408,8 +408,12 @@ class DBManager {
     if (this.resolveReady) this.resolveReady(true);
   }
 
-  async seedFallbackSymbolsForExchange(exchange = 'BINANCE') {
+  async seedFallbackSymbolsForExchange(exchange = 'BINANCE', customRisk = null, customLev = null, customMargin = null) {
     const ex = (exchange || 'BINANCE').toUpperCase();
+    const riskPct = customRisk !== null ? customRisk : Number(await this.getSetting('risk_pct_per_trade', '1.0'));
+    const leverage = customLev !== null ? customLev : Number(await this.getSetting('max_leverage', '20'));
+    const marginMode = customMargin !== null ? customMargin : (await this.getSetting('margin_mode', 'ISOLATED'));
+
     const topSymbols = [
       'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT',
       'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'NEARUSDT', 'LINKUSDT', 'TRUMPUSDT',
@@ -419,41 +423,47 @@ class DBManager {
     ];
 
     const now = Date.now();
-    for (let i = 0; i < topSymbols.length; i++) {
-      const sym = topSymbols[i];
-      const rank = i + 1;
-      const symId = `sym_${ex.toLowerCase()}_${sym.toLowerCase()}`;
-      const category = rank <= 10 ? `Top 10 ${ex} Core` : `Top 30 ${ex} High Vol`;
-      const tags = JSON.stringify([`Rank#${rank}`, category, ex, 'Perpetual', '5m-15m']);
+    try {
+      await this.run('BEGIN TRANSACTION');
+      for (let i = 0; i < topSymbols.length; i++) {
+        const sym = topSymbols[i];
+        const rank = i + 1;
+        const symId = `sym_${ex.toLowerCase()}_${sym.toLowerCase()}`;
+        const category = rank <= 10 ? `Top 10 ${ex} Core` : `Top 30 ${ex} High Vol`;
+        const tags = JSON.stringify([`Rank#${rank}`, category, ex, 'Perpetual', '5m-15m']);
 
-      await this.run(`
-        INSERT OR IGNORE INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?)
-      `, [symId, sym, ex, category, tags, now, now]);
+        await this.run(`
+          INSERT OR IGNORE INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
+          VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+        `, [symId, sym, ex, category, tags, now, now]);
 
-      // Dual 5m & 15m Strategies
-      const id5m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_5m_dual`;
-      const id15m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_15m_dual`;
+        // Dual 5m & 15m Strategies
+        const id5m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_5m_dual`;
+        const id15m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_15m_dual`;
 
-      await this.run(`
-        INSERT OR IGNORE INTO symbol_strategies (
-          id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
-          cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
-        ) VALUES (
-          ?, ?, ?, ?, 'dual', '5m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
-          14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
-        )
-      `, [id5m, sym, ex, `${sym} ${ex} Dual 5m Pro`, now, now]);
+        await this.run(`
+          INSERT OR IGNORE INTO symbol_strategies (
+            id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+            cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
+          ) VALUES (
+            ?, ?, ?, ?, 'dual', '5m', 1, ?, ?, ?, 'MARKET',
+            14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
+          )
+        `, [id5m, sym, ex, `${sym} ${ex} Dual 5m Pro`, riskPct, leverage, marginMode, now, now]);
 
-      await this.run(`
-        INSERT OR IGNORE INTO symbol_strategies (
-          id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
-          cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
-        ) VALUES (
-          ?, ?, ?, ?, 'dual', '15m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
-          14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
-        )
-      `, [id15m, sym, ex, `${sym} ${ex} Dual 15m Pro`, now, now]);
+        await this.run(`
+          INSERT OR IGNORE INTO symbol_strategies (
+            id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+            cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
+          ) VALUES (
+            ?, ?, ?, ?, 'dual', '15m', 1, ?, ?, ?, 'MARKET',
+            14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
+          )
+        `, [id15m, sym, ex, `${sym} ${ex} Dual 15m Pro`, riskPct, leverage, marginMode, now, now]);
+      }
+      await this.run('COMMIT');
+    } catch (err) {
+      try { await this.run('ROLLBACK'); } catch(e) {}
     }
   }
 
@@ -950,14 +960,20 @@ class DBManager {
     } = options;
 
     if (resetTables) {
-      await this.run('DELETE FROM trade_positions');
-      await this.run('DELETE FROM signals_alerts');
-      await this.run('DELETE FROM ohlcv_candles');
-      await this.run('DELETE FROM symbol_strategies');
-      await this.run('DELETE FROM whitelist_symbols');
-      await this.run('DELETE FROM chart_drawings');
-      await this.run('DELETE FROM order_notes');
-      try { await this.run('VACUUM'); } catch (e) {}
+      try {
+        await this.run('BEGIN TRANSACTION');
+        await this.run('DELETE FROM trade_positions');
+        await this.run('DELETE FROM signals_alerts');
+        await this.run('DELETE FROM ohlcv_candles');
+        await this.run('DELETE FROM symbol_strategies');
+        await this.run('DELETE FROM whitelist_symbols');
+        await this.run('DELETE FROM chart_drawings');
+        await this.run('DELETE FROM order_notes');
+        await this.run('COMMIT');
+        try { await this.run('VACUUM'); } catch(e) {}
+      } catch (err) {
+        try { await this.run('ROLLBACK'); } catch (e) {}
+      }
     }
 
     // Save System Risk & Capital Settings
@@ -976,26 +992,24 @@ class DBManager {
     await this.setSetting('is_scanner_active', '1');
     await this.setSetting('wizard_completed_at', String(Date.now()));
 
-    // Seed 90% perpetual symbols for enabled exchanges
-    const discoverySummary = [];
+    // 1. Instantly seed top 30 liquid perpetual pairs for all enabled exchanges (360 tasks immediately in <10ms)
+    for (const ex of enabledExchanges) {
+      await this.seedFallbackSymbolsForExchange(ex, riskPct, maxLeverage, marginMode);
+    }
+
+    // 2. Background non-blocking discovery of full 90% perpetual contract list
     if (autoSeedSymbols && enabledExchanges && enabledExchanges.length > 0) {
       const exchangeManager = require('./exchanges');
-      for (const ex of enabledExchanges) {
-        try {
-          const res = await exchangeManager.discoverAndSeedPerpetuals(ex);
-          discoverySummary.push(...res);
-        } catch (err) {
-          discoverySummary.push({ exchange: ex, error: err.message });
-        }
-      }
+      // Fire-and-forget background discovery without blocking HTTP response
+      Promise.all(enabledExchanges.map(ex => exchangeManager.discoverAndSeedPerpetuals(ex)))
+        .catch(err => console.error('Background CCXT discovery error:', err.message));
     }
 
     return {
       success: true,
       initialBalance: Number(initialBalance),
       riskSettings: { riskPct, maxLeverage, marginMode, tp1Ratio, tp1ClosePct, autoBreakeven, tp2Ratio, maxConcurrentPositions, dailyDrawdownPct },
-      enabledExchanges,
-      discoverySummary
+      enabledExchanges
     };
   }
 }

@@ -250,37 +250,48 @@ app.get('/api/wizard/status', async (req, res) => {
 
 app.post('/api/wizard/apply', async (req, res) => {
   try {
-    logger.info('WIZARD', '🧙‍♂️ Executing Setup Wizard with custom parameters...');
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    logger.info('WIZARD', '🧙‍♂️ BƯỚC 1: Ngưng toàn bộ tính năng Scanner & Worker Threads...');
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    // 1. NGƯNG TÍNH NĂNG SCAN TRƯỚC TIÊN
+    scanner.stop();
+
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    logger.info('WIZARD', '💾 BƯỚC 2: Reset sạch sẽ toàn bộ Database SQLite & Cấu hình mới...');
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    // 2. RESET DB SẠCH SẼ
     const result = await DB.initializeSystemWithWizard(req.body);
-    
-    // ── PROGRAMMATIC AUTOMATIC SERVER HOT-REBOOT & SERVICE RE-INIT ──
-    logger.info('SERVER', '🔄 Auto-rebooting server services to apply new wizard configuration...');
-    
-    // 1. Reconnect active exchange WebSockets
+
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    logger.info('WIZARD', '🔄 BƯỚC 3: Khởi động lại dịch vụ (Clean Restart) & Kết nối Sàn...');
+    logger.info('WIZARD', '═══════════════════════════════════════════════════════════════');
+    // 3. RESTART LẠI HỆ THỐNG
     exchangeManager.connectAllWebSockets();
-    
-    // 2. Restart background 24/7 Scanner with fresh symbols and rules
-    scanner.restart().catch(err => logger.error('SCANNER', `Scanner auto-restart error: ${err.message}`));
-    
-    // 3. Broadcast server reboot notification to all web clients
+    await scanner.restart();
+
+    // 4. Phát tín hiệu đồng bộ lại toàn bộ giao diện Web Clients
     notification.broadcast('SERVER_REBOOT', {
       timestamp: Date.now(),
       message: 'Máy chủ đã tự động khởi động lại và áp dụng toàn bộ cấu hình mới!'
     });
     notification.broadcast('POSITIONS_UPDATE', {
+      active: [],
       positions: [],
+      all: [],
       stats: await DB.getPerformanceStats()
     });
     notification.broadcast('SIGNALS_UPDATE', { signals: [] });
 
     res.json({
       success: true,
-      message: 'Setup Wizard hoàn tất! Máy chủ đã tự động khởi động lại và áp dụng cấu hình mới.',
+      message: 'Setup Wizard hoàn tất! Đã ngưng scan, reset sạch sẽ dữ liệu và restart thành công.',
       rebooted: true,
       data: result
     });
   } catch (err) {
     logger.error('WIZARD', `Setup Wizard error: ${err.message}`);
+    // Đảm bảo nếu có lỗi vẫn cố gắng khởi động lại scanner
+    try { await scanner.restart(); } catch(e) {}
     res.status(500).json({ success: false, error: err.message });
   }
 });

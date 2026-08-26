@@ -3703,7 +3703,7 @@ function SetupWizardModal({ isOpen, onClose, onCompleted }) {
                       </button>
                     ))}
                   </div>
-                  <span className="text-[10px] text-slate-400">Khuyến nghị 1.0%: Mỗi lệnh tối đa mất ${((initialBalance * riskPct) / 100).toFixed(2)} khi chạm SL.</span>
+                  <span className="text-[10px] text-slate-400">Khuyến nghị 1.0%: Vốn Ký Quỹ Margin vào mỗi lệnh = ${((initialBalance * riskPct) / 100).toFixed(2)} USDT (với Vốn ${initialBalance}).</span>
                 </div>
 
                 {/* Leverage & Margin */}

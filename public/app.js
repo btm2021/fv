@@ -3680,7 +3680,7 @@ function SetupWizardModal({
     onClick: () => setRiskPct(r)
   }, r, "%"))), /*#__PURE__*/React.createElement("span", {
     className: "text-[10px] text-slate-400"
-  }, "Khuyến nghị 1.0%: Mỗi lệnh tối đa mất $", (initialBalance * riskPct / 100).toFixed(2), " khi chạm SL.")), /*#__PURE__*/React.createElement("div", {
+  }, "Khuyến nghị 1.0%: Vốn Ký Quỹ Margin vào mỗi lệnh = $", (initialBalance * riskPct / 100).toFixed(2), " USDT (với Vốn $", initialBalance, ").")), /*#__PURE__*/React.createElement("div", {
     className: "p-3 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-white font-bold"

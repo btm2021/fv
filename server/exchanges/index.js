@@ -74,10 +74,15 @@ class ExchangeManager {
     const summary = [];
     const now = Date.now();
 
+    const riskPct = Number(await DB.getSetting('risk_pct_per_trade', '1.0'));
+    const leverage = Number(await DB.getSetting('max_leverage', '20'));
+    const marginMode = await DB.getSetting('margin_mode', 'ISOLATED');
+
     for (const cfg of targets) {
       try {
         const client = new ccxt[cfg.exClass]({
           enableRateLimit: true,
+          timeout: 8000,
           options: cfg.options
         });
 
@@ -124,62 +129,74 @@ class ExchangeManager {
         const selectedSymbols = uniqueRanked.slice(0, target90Count);
 
         let insertCount = 0;
-        for (let i = 0; i < selectedSymbols.length; i++) {
-          const sym = selectedSymbols[i].symbol;
-          const rank = i + 1;
-          const symId = `sym_${cfg.id.toLowerCase()}_${sym.toLowerCase()}`;
-          let category = `${cfg.id} Top Liquidity`;
-          if (rank <= 50) category = `Top 50 ${cfg.id} Ultra`;
-          else if (rank <= 200) category = `Top 200 High Vol`;
+        try {
+          await DB.run('BEGIN TRANSACTION');
+          for (let i = 0; i < selectedSymbols.length; i++) {
+            const sym = selectedSymbols[i].symbol;
+            const rank = i + 1;
+            const symId = `sym_${cfg.id.toLowerCase()}_${sym.toLowerCase()}`;
+            let category = `${cfg.id} Top Liquidity`;
+            if (rank <= 50) category = `Top 50 ${cfg.id} Ultra`;
+            else if (rank <= 200) category = `Top 200 High Vol`;
 
-          const tags = JSON.stringify([`Rank#${rank}`, category, cfg.id, 'Perpetual', '5m-15m']);
+            const tags = JSON.stringify([`Rank#${rank}`, category, cfg.id, 'Perpetual', '5m-15m']);
 
-          await DB.run(`
-            INSERT INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?)
-            ON CONFLICT(symbol, exchange) DO UPDATE SET
-              category = excluded.category,
-              tags = excluded.tags,
-              updated_at = excluded.updated_at
-          `, [symId, sym, cfg.id, category, tags, now, now]);
+            await DB.run(`
+              INSERT INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
+              VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+              ON CONFLICT(symbol, exchange) DO UPDATE SET
+                category = excluded.category,
+                tags = excluded.tags,
+                updated_at = excluded.updated_at
+            `, [symId, sym, cfg.id, category, tags, now, now]);
 
-          const stratId5m = `strat_${cfg.id.toLowerCase()}_${sym.toLowerCase()}_5m_dual`;
-          await DB.run(`
-            INSERT INTO symbol_strategies (
-              id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
-              cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
-              fvg_threshold_pct, swing_lookback, created_at, updated_at
-            ) VALUES (
-              ?, ?, ?, ?, 'dual', '5m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
-              14, 21, 14, 2.0, 0.35, 1.5,
-              1.5, 30, ?, ?
-            )
-            ON CONFLICT(id) DO UPDATE SET
-              exchange = excluded.exchange,
-              strategy_name = excluded.strategy_name,
-              is_enabled = excluded.is_enabled,
-              updated_at = excluded.updated_at
-          `, [stratId5m, sym, cfg.id, `${sym} ${cfg.id} Dual 5m Pro`, now, now]);
+            const stratId5m = `strat_${cfg.id.toLowerCase()}_${sym.toLowerCase()}_5m_dual`;
+            await DB.run(`
+              INSERT INTO symbol_strategies (
+                id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+                cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
+                fvg_threshold_pct, swing_lookback, created_at, updated_at
+              ) VALUES (
+                ?, ?, ?, ?, 'dual', '5m', 1, ?, ?, ?, 'MARKET',
+                14, 21, 14, 2.0, 0.35, 1.5,
+                1.5, 30, ?, ?
+              )
+              ON CONFLICT(id) DO UPDATE SET
+                exchange = excluded.exchange,
+                strategy_name = excluded.strategy_name,
+                is_enabled = excluded.is_enabled,
+                risk_pct = excluded.risk_pct,
+                leverage = excluded.leverage,
+                margin_mode = excluded.margin_mode,
+                updated_at = excluded.updated_at
+            `, [stratId5m, sym, cfg.id, `${sym} ${cfg.id} Dual 5m Pro`, riskPct, leverage, marginMode, now, now]);
 
-          const stratId15m = `strat_${cfg.id.toLowerCase()}_${sym.toLowerCase()}_15m_dual`;
-          await DB.run(`
-            INSERT INTO symbol_strategies (
-              id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
-              cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
-              fvg_threshold_pct, swing_lookback, created_at, updated_at
-            ) VALUES (
-              ?, ?, ?, ?, 'dual', '15m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
-              14, 21, 14, 2.0, 0.35, 1.5,
-              1.5, 30, ?, ?
-            )
-            ON CONFLICT(id) DO UPDATE SET
-              exchange = excluded.exchange,
-              strategy_name = excluded.strategy_name,
-              is_enabled = excluded.is_enabled,
-              updated_at = excluded.updated_at
-          `, [stratId15m, sym, cfg.id, `${sym} ${cfg.id} Dual 15m Pro`, now, now]);
+            const stratId15m = `strat_${cfg.id.toLowerCase()}_${sym.toLowerCase()}_15m_dual`;
+            await DB.run(`
+              INSERT INTO symbol_strategies (
+                id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+                cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct,
+                fvg_threshold_pct, swing_lookback, created_at, updated_at
+              ) VALUES (
+                ?, ?, ?, ?, 'dual', '15m', 1, ?, ?, ?, 'MARKET',
+                14, 21, 14, 2.0, 0.35, 1.5,
+                1.5, 30, ?, ?
+              )
+              ON CONFLICT(id) DO UPDATE SET
+                exchange = excluded.exchange,
+                strategy_name = excluded.strategy_name,
+                is_enabled = excluded.is_enabled,
+                risk_pct = excluded.risk_pct,
+                leverage = excluded.leverage,
+                margin_mode = excluded.margin_mode,
+                updated_at = excluded.updated_at
+            `, [stratId15m, sym, cfg.id, `${sym} ${cfg.id} Dual 15m Pro`, riskPct, leverage, marginMode, now, now]);
 
-          insertCount++;
+            insertCount++;
+          }
+          await DB.run('COMMIT');
+        } catch (dbErr) {
+          try { await DB.run('ROLLBACK'); } catch(e) {}
         }
 
         summary.push({ exchange: cfg.id, total_discovered: perpMarkets.length, seeded_90_pct: insertCount });

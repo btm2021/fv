@@ -68,13 +68,9 @@ class TradeExecutor {
       }
     }
 
-    // ── STANDARDIZED SIZING & MARGIN ──
-    const slDistPct = Math.abs(signal.entry_price - signal.sl_price) / signal.entry_price;
-    const effectiveSlPct = Math.max(slDistPct, 0.012); // Minimum 1.2% SL distance for safety
-    const riskUsd = walletBalance * riskPct;
-
-    let initialMargin = riskUsd / (effectiveSlPct * leverage);
-    initialMargin = Math.min(initialMargin, availableBalance * 0.3, 250.0);
+    // ── DIRECT EQUITY PERCENTAGE POSITION SIZING ──
+    // Ví dụ: Vốn Equity $10,000, risk_pct 1.0% -> Vốn Ký Quỹ Margin mỗi lệnh = $100.00 USDT
+    let initialMargin = walletBalance * riskPct;
     if (initialMargin < 5.0) {
       initialMargin = Math.min(5.0, availableBalance * 0.95);
     }
