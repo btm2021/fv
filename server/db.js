@@ -15,12 +15,22 @@ if (!fs.existsSync(dataDir)) {
 
 class DBManager {
   constructor() {
+    this.isReady = false;
+    this.readyPromise = new Promise((resolve) => {
+      this.resolveReady = resolve;
+    });
+
     this.db = new sqlite3.Database(DB_PATH);
     this.db.serialize(() => {
       this.db.run('PRAGMA journal_mode = WAL;');
       this.db.run('PRAGMA synchronous = NORMAL;');
       this.initSchema();
     });
+  }
+
+  async waitUntilReady() {
+    if (this.isReady) return true;
+    return await this.readyPromise;
   }
 
   run(sql, params = []) {
@@ -383,6 +393,67 @@ class DBManager {
         INSERT OR IGNORE INTO system_settings (key, value, updated_at)
         VALUES (?, ?, ?)
       `, [item.key, item.value, Date.now()]);
+    }
+
+    // Seed default top liquid symbols for all 6 exchanges if whitelist is empty
+    const existing = await this.get('SELECT COUNT(*) as count FROM whitelist_symbols');
+    if (!existing || existing.count < 50) {
+      const exchanges = ['BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'];
+      for (const ex of exchanges) {
+        await this.seedFallbackSymbolsForExchange(ex);
+      }
+    }
+
+    this.isReady = true;
+    if (this.resolveReady) this.resolveReady(true);
+  }
+
+  async seedFallbackSymbolsForExchange(exchange = 'BINANCE') {
+    const ex = (exchange || 'BINANCE').toUpperCase();
+    const topSymbols = [
+      'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT',
+      'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'NEARUSDT', 'LINKUSDT', 'TRUMPUSDT',
+      'PEPEUSDT', '1000PEPEUSDT', 'ENAUSDT', 'WIFUSDT', 'APTUSDT', 'OPUSDT',
+      'ARBUSDT', 'FETUSDT', 'TAOUSDT', 'RENDERUSDT', 'HYPEUSDT', 'GALAUSDT',
+      'FILUSDT', 'LDOUSDT', 'AAVEUSDT', 'CRVUSDT', 'UNIUSDT', 'ZECUSDT'
+    ];
+
+    const now = Date.now();
+    for (let i = 0; i < topSymbols.length; i++) {
+      const sym = topSymbols[i];
+      const rank = i + 1;
+      const symId = `sym_${ex.toLowerCase()}_${sym.toLowerCase()}`;
+      const category = rank <= 10 ? `Top 10 ${ex} Core` : `Top 30 ${ex} High Vol`;
+      const tags = JSON.stringify([`Rank#${rank}`, category, ex, 'Perpetual', '5m-15m']);
+
+      await this.run(`
+        INSERT OR IGNORE INTO whitelist_symbols (id, symbol, exchange, is_enabled, category, tags, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+      `, [symId, sym, ex, category, tags, now, now]);
+
+      // Dual 5m & 15m Strategies
+      const id5m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_5m_dual`;
+      const id15m = `strat_${ex.toLowerCase()}_${sym.toLowerCase()}_15m_dual`;
+
+      await this.run(`
+        INSERT OR IGNORE INTO symbol_strategies (
+          id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+          cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, 'dual', '5m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
+          14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
+        )
+      `, [id5m, sym, ex, `${sym} ${ex} Dual 5m Pro`, now, now]);
+
+      await this.run(`
+        INSERT OR IGNORE INTO symbol_strategies (
+          id, symbol, exchange, strategy_name, strategy_type, timeframe, is_enabled, risk_pct, leverage, margin_mode, order_type,
+          cmo_length, ma_length, atr_length, atr_mult, min_atr_pct, liq_threshold_pct, fvg_threshold_pct, swing_lookback, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, 'dual', '15m', 1, 1.0, 20, 'ISOLATED', 'MARKET',
+          14, 21, 14, 2.0, 0.35, 1.5, 1.5, 30, ?, ?
+        )
+      `, [id15m, sym, ex, `${sym} ${ex} Dual 15m Pro`, now, now]);
     }
   }
 

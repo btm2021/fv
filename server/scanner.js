@@ -64,9 +64,13 @@ class ExchangeWorker {
   }
 
   async refreshTaskQueue() {
-    const activeStrategies = await DB.getAllEnabledStrategies(this.exchange);
-    const grouped = {};
+    let activeStrategies = await DB.getAllEnabledStrategies(this.exchange);
+    if (!activeStrategies || activeStrategies.length === 0) {
+      await DB.seedFallbackSymbolsForExchange(this.exchange);
+      activeStrategies = await DB.getAllEnabledStrategies(this.exchange);
+    }
 
+    const grouped = {};
     for (const strat of activeStrategies) {
       const key = `${strat.symbol}_${strat.timeframe}`;
       if (!grouped[key]) {
@@ -197,6 +201,7 @@ class ScannerEngine {
     logger.info('SCANNER', '   • Independent Queues & Dedicated Rate Budgets (5-Minute Cycles)');
     logger.info('SCANNER', '══════════════════════════════════════════════════════════════════════');
 
+    await DB.waitUntilReady();
     await this.ensureDatabasesSeeded();
 
     for (const worker of Object.values(this.workers)) {
