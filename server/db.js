@@ -859,6 +859,74 @@ class DBManager {
     await this.setSetting('is_scanner_active', '1');
     try { await this.run('VACUUM'); } catch (e) {}
   }
+
+  // ── SETUP WIZARD INITIALIZER ──
+  async initializeSystemWithWizard(options = {}) {
+    const {
+      resetTables = true,
+      initialBalance = 1000.0,
+      riskPct = 1.0,
+      maxLeverage = 20,
+      marginMode = 'ISOLATED',
+      tp1Ratio = 1.5,
+      tp1ClosePct = 50,
+      autoBreakeven = true,
+      tp2Ratio = 3.0,
+      maxConcurrentPositions = 5,
+      dailyDrawdownPct = 4.0,
+      enabledExchanges = ['BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'],
+      autoSeedSymbols = true
+    } = options;
+
+    if (resetTables) {
+      await this.run('DELETE FROM trade_positions');
+      await this.run('DELETE FROM signals_alerts');
+      await this.run('DELETE FROM ohlcv_candles');
+      await this.run('DELETE FROM symbol_strategies');
+      await this.run('DELETE FROM whitelist_symbols');
+      await this.run('DELETE FROM chart_drawings');
+      await this.run('DELETE FROM order_notes');
+      try { await this.run('VACUUM'); } catch (e) {}
+    }
+
+    // Save System Risk & Capital Settings
+    await this.setSetting('account_equity', String(Number(initialBalance).toFixed(2)));
+    await this.setSetting('initial_capital', String(Number(initialBalance).toFixed(2)));
+    await this.setSetting('risk_pct_per_trade', String(riskPct));
+    await this.setSetting('max_leverage', String(maxLeverage));
+    await this.setSetting('margin_mode', marginMode);
+    await this.setSetting('tp1_ratio', String(tp1Ratio));
+    await this.setSetting('tp1_close_pct', String(tp1ClosePct));
+    await this.setSetting('auto_breakeven', autoBreakeven ? '1' : '0');
+    await this.setSetting('tp2_ratio', String(tp2Ratio));
+    await this.setSetting('max_concurrent_positions', String(maxConcurrentPositions));
+    await this.setSetting('daily_max_drawdown_pct', String(dailyDrawdownPct));
+    await this.setSetting('enabled_exchanges', JSON.stringify(enabledExchanges));
+    await this.setSetting('is_scanner_active', '1');
+    await this.setSetting('wizard_completed_at', String(Date.now()));
+
+    // Seed 90% perpetual symbols for enabled exchanges
+    const discoverySummary = [];
+    if (autoSeedSymbols && enabledExchanges && enabledExchanges.length > 0) {
+      const exchangeManager = require('./exchanges');
+      for (const ex of enabledExchanges) {
+        try {
+          const res = await exchangeManager.discoverAndSeedPerpetuals(ex);
+          discoverySummary.push(...res);
+        } catch (err) {
+          discoverySummary.push({ exchange: ex, error: err.message });
+        }
+      }
+    }
+
+    return {
+      success: true,
+      initialBalance: Number(initialBalance),
+      riskSettings: { riskPct, maxLeverage, marginMode, tp1Ratio, tp1ClosePct, autoBreakeven, tp2Ratio, maxConcurrentPositions, dailyDrawdownPct },
+      enabledExchanges,
+      discoverySummary
+    };
+  }
 }
 
 module.exports = new DBManager();

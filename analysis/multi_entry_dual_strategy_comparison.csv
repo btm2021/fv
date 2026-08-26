@@ -1,5 +1,0 @@
-Setup,Setup Description,Total Trades,Win Rate %,Profit Factor,Total Net PnL %,Avg PnL / Trade %
-A,Setup A (Baseline: Single Market Trend + Single Limit Fade + Fixed 2% TP),1814,73.48,1.73,915.4,0.505
-B,Setup B (Multi-Entry Grid: 50% Market + 50% FVG Limit + Fixed 2% TP),1814,74.31,1.61,542.0,0.299
-C,Setup C (SMC Tiered TP: Single Entry + TP1 Opposing FVG + TP2 Opposing Liq + Breakeven),1814,79.66,1.91,899.3,0.496
-D,Setup D (Full SMC Master: Multi-Entry FVG/Liq Grid + Tiered TP1/TP2 + Breakeven),1814,80.76,1.84,582.5,0.321

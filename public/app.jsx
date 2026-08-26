@@ -270,11 +270,89 @@ const DirectExchangeClient = {
     })).sort((a, b) => a.time - b.time);
   },
 
+  async fetchBitget(symbol, interval = '5m', limit = 1000) {
+    const tfMap = { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '4h': '4H', '1d': '1D' };
+    const gran = tfMap[interval] || '5m';
+    const url = `https://api.bitget.com/api/v2/mix/market/candles?symbol=${symbol.toUpperCase()}&granularity=${gran}&productType=USDT-FUTURES&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Bitget HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.data || !Array.isArray(json.data)) return [];
+    return json.data.map(k => ({
+      time: Math.floor(parseInt(k[0], 10) / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5])
+    })).sort((a, b) => a.time - b.time);
+  },
+
+  async fetchGate(symbol, interval = '5m', limit = 1000) {
+    const sym = symbol.toUpperCase();
+    const contract = sym.includes('_') ? sym : (sym.endsWith('USDT') ? `${sym.substring(0, sym.length - 4)}_USDT` : `${sym}_USDT`);
+    const tfMap = { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h', '4h': '4h', '1d': '1d' };
+    const bar = tfMap[interval] || '5m';
+    const url = `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${contract}&interval=${bar}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Gate HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map(k => ({
+      time: parseInt(k.t, 10),
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c),
+      volume: parseFloat(k.v)
+    })).sort((a, b) => a.time - b.time);
+  },
+
+  async fetchBingX(symbol, interval = '5m', limit = 1000) {
+    const sym = symbol.toUpperCase();
+    const rawSym = sym.includes('-') ? sym : (sym.endsWith('USDT') ? `${sym.substring(0, sym.length - 4)}-USDT` : `${sym}-USDT`);
+    const tfMap = { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h', '4h': '4h', '1d': '1d' };
+    const bar = tfMap[interval] || '5m';
+    const url = `https://open-api.bingx.com/openApi/swap/v2/market/kline?symbol=${rawSym}&interval=${bar}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`BingX HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.data || !Array.isArray(json.data)) return [];
+    return json.data.map(k => ({
+      time: Math.floor(parseInt(k.time, 10) / 1000),
+      open: parseFloat(k.open),
+      high: parseFloat(k.high),
+      low: parseFloat(k.low),
+      close: parseFloat(k.close),
+      volume: parseFloat(k.volume)
+    })).sort((a, b) => a.time - b.time);
+  },
+
   async fetchCandles(exchange, symbol, timeframe) {
     const ex = (exchange || 'BINANCE').toUpperCase();
-    if (ex === 'BYBIT') return this.fetchBybit(symbol, timeframe);
-    if (ex === 'OKX') return this.fetchOkx(symbol, timeframe);
-    return this.fetchBinance(symbol, timeframe);
+    try {
+      if (ex === 'BYBIT') return await this.fetchBybit(symbol, timeframe);
+      if (ex === 'OKX') return await this.fetchOkx(symbol, timeframe);
+      if (ex === 'BITGET') return await this.fetchBitget(symbol, timeframe);
+      if (ex === 'GATE') return await this.fetchGate(symbol, timeframe);
+      if (ex === 'BINGX') return await this.fetchBingX(symbol, timeframe);
+      if (ex === 'BINANCE') return await this.fetchBinance(symbol, timeframe);
+    } catch (err) {
+      console.warn(`[Direct Exchange Client] Direct fetch note for ${ex} ${symbol}:`, err.message);
+    }
+
+    // High Reliability CCXT Pro Backend Proxy Fallback
+    try {
+      const res = await fetch(`/api/chart/${symbol}/${timeframe}?exchange=${ex}`);
+      const json = await res.json();
+      if (json && json.candles && Array.isArray(json.candles) && json.candles.length > 0) {
+        return json.candles;
+      }
+    } catch (proxyErr) {
+      console.error(`[CCXT Proxy Error] ${ex} ${symbol}:`, proxyErr.message);
+    }
+
+    return [];
   },
 
   createWebSocket(exchange, symbol, timeframe, onTick) {
@@ -2520,6 +2598,1363 @@ function OrderForensicsModal({
   );
 }
 
+// ── TRADING JOURNAL & PERFORMANCE CALENDAR COMPONENT ──
+function TradingJournalModal({ onClose, onOpenForensics, onSelectSymbol }) {
+  const [exchangeFilter, setExchangeFilter] = useState('ALL');
+  const [journalData, setJournalData] = useState({ trades: [], stats: {}, active_positions: [] });
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL'); // ALL, WIN, LOSS, ACTIVE
+  const [selectedDateFilter, setSelectedDateFilter] = useState(null); // 'YYYY-MM-DD'
+  const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
+  const [copiedToast, setCopiedToast] = useState(false);
+
+  // Calendar Month Navigation
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth(); // 0-indexed
+
+  // Fetch Journal Data
+  const fetchJournal = useCallback(async () => {
+    setLoading(true);
+    try {
+      const url = exchangeFilter === 'ALL' ? '/api/journal' : `/api/journal?exchange=${exchangeFilter}`;
+      const res = await fetch(url).then(r => r.json());
+      if (res.success && res.data) {
+        setJournalData(res.data);
+      }
+    } catch (err) {
+      console.warn('Error fetching journal:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [exchangeFilter]);
+
+  useEffect(() => {
+    fetchJournal();
+  }, [fetchJournal]);
+
+  const trades = journalData.trades || [];
+  const closedTrades = trades.filter(t => t.status !== 'ACTIVE');
+  const activeTrades = journalData.active_positions || trades.filter(t => t.status === 'ACTIVE');
+
+  // Month navigation handlers
+  const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+  const resetToToday = () => setCurrentDate(new Date());
+
+  const monthName = currentDate.toLocaleString('vi-VN', { month: 'long', year: 'numeric' });
+
+  // Map trades by date (YYYY-MM-DD)
+  const tradesByDate = useMemo(() => {
+    const map = {};
+    trades.forEach(t => {
+      const ts = t.close_time || t.open_time || t.created_at || Date.now();
+      const d = new Date(ts);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(t);
+    });
+    return map;
+  }, [trades]);
+
+  // Generate Calendar Grid
+  const calendarDays = useMemo(() => {
+    const firstDayOfMonth = new Date(year, month, 1).getDay(); // 0 = Sun, 1 = Mon...
+    const startOffset = (firstDayOfMonth + 6) % 7; // Monday = 0
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days = [];
+    for (let i = 0; i < startOffset; i++) {
+      days.push({ day: null, dateKey: null, trades: [], pnl: 0, wins: 0, losses: 0 });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const dayTrades = tradesByDate[dateKey] || [];
+      const pnl = dayTrades.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+      const wins = dayTrades.filter(t => (Number(t.net_pnl_usd) || 0) > 0).length;
+      const losses = dayTrades.filter(t => (Number(t.net_pnl_usd) || 0) < 0).length;
+      days.push({ day: d, dateKey, trades: dayTrades, pnl, wins, losses });
+    }
+    return days;
+  }, [year, month, tradesByDate]);
+
+  // Performance Calculations
+  const stats = useMemo(() => {
+    const total = closedTrades.length;
+    const wins = closedTrades.filter(t => (Number(t.net_pnl_usd) || 0) > 0);
+    const losses = closedTrades.filter(t => (Number(t.net_pnl_usd) || 0) < 0);
+    const winRate = total > 0 ? (wins.length / total) * 100 : 0;
+    const totalGain = wins.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+    const totalLoss = Math.abs(losses.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0));
+    const netPnl = closedTrades.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+    const profitFactor = totalLoss > 0 ? (totalGain / totalLoss) : (totalGain > 0 ? 999 : 0);
+    const avgWin = wins.length > 0 ? totalGain / wins.length : 0;
+    const avgLoss = losses.length > 0 ? totalLoss / losses.length : 0;
+    const totalFees = trades.reduce((sum, t) => sum + (Number(t.fee_usd) || 0), 0);
+
+    const longTrades = closedTrades.filter(t => (t.direction || '').toUpperCase() === 'LONG');
+    const shortTrades = closedTrades.filter(t => (t.direction || '').toUpperCase() === 'SHORT');
+    const longPnl = longTrades.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+    const shortPnl = shortTrades.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+
+    let bestTrade = null;
+    let worstTrade = null;
+    closedTrades.forEach(t => {
+      const pnl = Number(t.net_pnl_usd) || 0;
+      if (!bestTrade || pnl > (Number(bestTrade.net_pnl_usd) || 0)) bestTrade = t;
+      if (!worstTrade || pnl < (Number(worstTrade.net_pnl_usd) || 0)) worstTrade = t;
+    });
+
+    return {
+      total,
+      wins: wins.length,
+      losses: losses.length,
+      winRate,
+      totalGain,
+      totalLoss,
+      netPnl,
+      profitFactor,
+      avgWin,
+      avgLoss,
+      totalFees,
+      longCount: longTrades.length,
+      longPnl,
+      shortCount: shortTrades.length,
+      shortPnl,
+      bestTrade,
+      worstTrade,
+      activeCount: activeTrades.length
+    };
+  }, [closedTrades, activeTrades, trades]);
+
+  // Filtered Trades for Table
+  const filteredTrades = useMemo(() => {
+    return trades.filter(t => {
+      if (selectedDateFilter) {
+        const ts = t.close_time || t.open_time || t.created_at || Date.now();
+        const d = new Date(ts);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (key !== selectedDateFilter) return false;
+      }
+      if (statusFilter === 'WIN' && (Number(t.net_pnl_usd) || 0) <= 0) return false;
+      if (statusFilter === 'LOSS' && (Number(t.net_pnl_usd) || 0) >= 0) return false;
+      if (statusFilter === 'ACTIVE' && t.status !== 'ACTIVE') return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchSym = (t.symbol || '').toLowerCase().includes(q);
+        const matchStrat = (t.strategy_name || '').toLowerCase().includes(q);
+        const matchNotes = (t.notes || '').toLowerCase().includes(q);
+        const matchReason = (t.exit_reason || t.entry_rationale || '').toLowerCase().includes(q);
+        if (!matchSym && !matchStrat && !matchNotes && !matchReason) return false;
+      }
+      return true;
+    });
+  }, [trades, selectedDateFilter, statusFilter, searchQuery]);
+
+  // Build JSON Report
+  const fullJsonReport = useMemo(() => {
+    return {
+      report_metadata: {
+        system: 'STAT2 Futures Trading Terminal',
+        report_title: 'Trading Journal & Forensics Performance Report',
+        generated_at: new Date().toISOString(),
+        exchange_filter: exchangeFilter,
+        selected_month: `${year}-${String(month + 1).padStart(2, '0')}`,
+        total_recorded_trades: trades.length
+      },
+      summary_kpis: {
+        total_closed_trades: stats.total,
+        winning_trades: stats.wins,
+        losing_trades: stats.losses,
+        active_positions: stats.activeCount,
+        win_rate_percent: Number(stats.winRate.toFixed(2)),
+        net_realized_pnl_usd: Number(stats.netPnl.toFixed(2)),
+        profit_factor: Number(stats.profitFactor.toFixed(2)),
+        total_gains_usd: Number(stats.totalGain.toFixed(2)),
+        total_losses_usd: Number(stats.totalLoss.toFixed(2)),
+        avg_win_usd: Number(stats.avgWin.toFixed(2)),
+        avg_loss_usd: Number(stats.avgLoss.toFixed(2)),
+        total_fees_usd: Number(stats.totalFees.toFixed(2)),
+        long_trades: stats.longCount,
+        long_pnl_usd: Number(stats.longPnl.toFixed(2)),
+        short_trades: stats.shortCount,
+        short_pnl_usd: Number(stats.shortPnl.toFixed(2)),
+        best_trade: stats.bestTrade ? {
+          symbol: stats.bestTrade.symbol,
+          direction: stats.bestTrade.direction,
+          pnl_usd: stats.bestTrade.net_pnl_usd,
+          roe_pct: stats.bestTrade.roe_pct
+        } : null,
+        worst_trade: stats.worstTrade ? {
+          symbol: stats.worstTrade.symbol,
+          direction: stats.worstTrade.direction,
+          pnl_usd: stats.worstTrade.net_pnl_usd,
+          roe_pct: stats.worstTrade.roe_pct
+        } : null
+      },
+      daily_calendar_breakdown: calendarDays
+        .filter(d => d.day && d.trades.length > 0)
+        .map(d => ({
+          date: d.dateKey,
+          trades_count: d.trades.length,
+          net_pnl_usd: Number(d.pnl.toFixed(2)),
+          wins: d.wins,
+          losses: d.losses,
+          symbols: Array.from(new Set(d.trades.map(t => t.symbol)))
+        })),
+      trades: trades.map(t => ({
+        id: t.id,
+        symbol: t.symbol,
+        exchange: t.exchange || 'BINANCE',
+        direction: t.direction,
+        leverage: t.leverage,
+        margin_mode: t.margin_mode,
+        status: t.status,
+        entry_price: t.entry_price,
+        current_price: t.current_price,
+        exit_price: t.exit_price,
+        tp1_price: t.tp1_price,
+        tp2_price: t.tp2_price,
+        sl_price: t.sl_price,
+        pos_size_usd: t.pos_size_usd,
+        initial_margin: t.initial_margin,
+        net_pnl_usd: t.net_pnl_usd,
+        roe_pct: t.roe_pct,
+        fee_usd: t.fee_usd,
+        open_time: t.open_time ? new Date(t.open_time).toISOString() : null,
+        close_time: t.close_time ? new Date(t.close_time).toISOString() : null,
+        duration_seconds: t.duration_seconds,
+        exit_reason: t.exit_reason,
+        entry_rationale: t.entry_rationale,
+        market_regime: t.market_regime,
+        user_notes: t.notes || '',
+        features: t.features || {}
+      }))
+    };
+  }, [trades, stats, calendarDays, exchangeFilter, year, month]);
+
+  const handleExportJson = () => {
+    const jsonStr = JSON.stringify(fullJsonReport, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `trading_journal_report_${exchangeFilter.toLowerCase()}_${year}_${month + 1}_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopyJson = () => {
+    const jsonStr = JSON.stringify(fullJsonReport, null, 2);
+    navigator.clipboard.writeText(jsonStr);
+    setCopiedToast(true);
+    setTimeout(() => setCopiedToast(false), 2500);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-[#090D16]/95 backdrop-blur-md flex flex-col overflow-hidden font-sans text-xs text-slate-200">
+      
+      {/* ── 1. MODAL HEADER BAR ── */}
+      <header className="h-14 px-4 md:px-6 border-b border-binance-border bg-[#0D111C] flex items-center justify-between shrink-0 shadow-lg z-20">
+        
+        {/* Left: Title & Quick Stats */}
+        <div className="flex items-center gap-3 md:gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">📖</span>
+            <div>
+              <h2 className="font-extrabold text-sm md:text-base text-white tracking-wide flex items-center gap-2">
+                <span>TRADING JOURNAL & PERFORMANCE CALENDAR</span>
+                <span className="text-[10px] bg-binance-yellow/20 text-binance-yellow px-2 py-0.5 rounded font-mono font-bold border border-binance-yellow/30">PRO FORENSICS</span>
+              </h2>
+              <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">Nhật ký giao dịch, phân tích PnL theo lịch & xuất dữ liệu JSON</span>
+            </div>
+          </div>
+
+          {/* Quick Badges */}
+          <div className="hidden lg:flex items-center gap-2 pl-3 border-l border-binance-border font-mono text-[11px]">
+            <span className="text-slate-400">Net PnL:</span>
+            <b className={`font-bold ${stats.netPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+              {stats.netPnl >= 0 ? '+' : ''}${formatPrice(stats.netPnl)} USD
+            </b>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400">Win Rate:</span>
+            <b className="text-binance-yellow font-bold">{stats.winRate.toFixed(1)}%</b>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400">Profit Factor:</span>
+            <b className="text-white font-bold">{stats.profitFactor.toFixed(2)}</b>
+          </div>
+        </div>
+
+        {/* Right: Exchange Filter, Export JSON Buttons & Close */}
+        <div className="flex items-center gap-2 font-mono">
+          
+          {/* Exchange Filter Tabs */}
+          <div className="hidden sm:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 text-[10px]">
+            {['ALL', 'BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'].map(ex => (
+              <button
+                key={ex}
+                className={`px-2 py-0.5 rounded font-bold transition ${exchangeFilter === ex ? 'bg-binance-yellow text-black shadow' : 'text-slate-400 hover:text-white'}`}
+                onClick={() => setExchangeFilter(ex)}
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+
+          {/* Export JSON Button */}
+          <button
+            className="bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow"
+            onClick={handleExportJson}
+            title="Tải về file JSON chi tiết đầy đủ thông số lệnh"
+          >
+            <span>📥</span>
+            <span className="hidden md:inline">Xuất Báo Cáo JSON</span>
+            <span className="md:hidden">JSON</span>
+          </button>
+
+          {/* Copy JSON Button */}
+          <button
+            className="bg-binance-subpanel hover:bg-binance-hover text-white border border-binance-border px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow"
+            onClick={handleCopyJson}
+            title="Copy toàn bộ JSON vào Clipboard"
+          >
+            <span>{copiedToast ? '✅' : '📋'}</span>
+            <span className="hidden md:inline">{copiedToast ? 'Đã Copy!' : 'Copy JSON'}</span>
+          </button>
+
+          {/* Inspect JSON Modal Button */}
+          <button
+            className="bg-binance-subpanel hover:bg-binance-hover text-slate-300 border border-binance-border px-2 py-1.5 rounded-lg text-xs font-bold transition"
+            onClick={() => setIsJsonModalOpen(true)}
+            title="Xem trước cấu trúc JSON"
+          >
+            <span>👁️</span>
+          </button>
+
+          {/* Close Modal Button */}
+          <button
+            className="w-8 h-8 rounded-lg bg-binance-subpanel hover:bg-binance-hover border border-binance-border text-slate-300 hover:text-white flex items-center justify-center font-bold text-sm transition ml-1"
+            onClick={onClose}
+            title="Đóng Nhật Ký Giao Dịch"
+          >
+            ✕
+          </button>
+        </div>
+      </header>
+
+      {/* ── 2. MAIN SCROLLABLE CONTENT ── */}
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col gap-6">
+        
+        {/* ── SECTION A: EXECUTIVE KPI SUMMARY DASHBOARD ── */}
+        <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 font-mono">
+          
+          {/* KPI 1: Net PnL */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>TỔNG LÃI/LỖ RÒNG</span>
+              <span>💵</span>
+            </div>
+            <div className="my-1.5">
+              <span className={`text-lg md:text-xl font-black ${stats.netPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                {stats.netPnl >= 0 ? '+' : ''}${formatPrice(stats.netPnl)}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">USD Thực Nhận</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-binance-border/60">
+              <span className="text-binance-green">+{formatPrice(stats.totalGain)}</span>
+              <span className="text-binance-red">-{formatPrice(stats.totalLoss)}</span>
+            </div>
+          </div>
+
+          {/* KPI 2: Win Rate */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>TỈ LỆ THẮNG (WIN RATE)</span>
+              <span>🎯</span>
+            </div>
+            <div className="my-1.5">
+              <span className="text-lg md:text-xl font-black text-binance-yellow">
+                {stats.winRate.toFixed(1)}%
+              </span>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1.5 flex">
+                <div className="bg-binance-green h-full" style={{ width: `${stats.winRate}%` }}></div>
+                <div className="bg-binance-red h-full" style={{ width: `${100 - stats.winRate}%` }}></div>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-binance-border/60 text-slate-300">
+              <span>Thắng: <b className="text-binance-green">{stats.wins}</b></span>
+              <span>Thua: <b className="text-binance-red">{stats.losses}</b></span>
+            </div>
+          </div>
+
+          {/* KPI 3: Profit Factor */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>HỆ SỐ LỢI NHUẬN (PF)</span>
+              <span>⚖️</span>
+            </div>
+            <div className="my-1.5">
+              <span className="text-lg md:text-xl font-black text-white">
+                {stats.profitFactor.toFixed(2)}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Gain / Loss Ratio</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-binance-border/60 text-slate-400">
+              <span>Avg W: <b className="text-binance-green">${formatPrice(stats.avgWin)}</b></span>
+              <span>Avg L: <b className="text-binance-red">${formatPrice(stats.avgLoss)}</b></span>
+            </div>
+          </div>
+
+          {/* KPI 4: Total Trades */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>TỔNG SỐ LỆNH</span>
+              <span>📊</span>
+            </div>
+            <div className="my-1.5">
+              <span className="text-lg md:text-xl font-black text-slate-100">
+                {stats.total + stats.activeCount}
+              </span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                {stats.activeCount} đang mở • {stats.total} đã đóng
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-binance-border/60 text-slate-400">
+              <span>Phí: <b>${formatPrice(stats.totalFees)}</b></span>
+              <span className="text-binance-cyan">⚡ 24/7 Bot</span>
+            </div>
+          </div>
+
+          {/* KPI 5: Long vs Short Breakdown */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>LONG VS SHORT</span>
+              <span>🔄</span>
+            </div>
+            <div className="my-1 flex flex-col gap-0.5 text-[11px]">
+              <div className="flex justify-between items-center">
+                <span className="text-binance-green font-bold">🟢 LONG ({stats.longCount}):</span>
+                <b className={stats.longPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}>{stats.longPnl >= 0 ? '+' : ''}${formatPrice(stats.longPnl)}</b>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-binance-red font-bold">🔴 SHORT ({stats.shortCount}):</span>
+                <b className={stats.shortPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}>{stats.shortPnl >= 0 ? '+' : ''}${formatPrice(stats.shortPnl)}</b>
+              </div>
+            </div>
+            <div className="text-[10px] pt-1 border-t border-binance-border/60 text-slate-400 text-center">
+              Phân bổ 2 chiều cân bằng
+            </div>
+          </div>
+
+          {/* KPI 6: Best & Worst Trade */}
+          <div className="p-3.5 bg-binance-panel border border-binance-border rounded-xl shadow flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+              <span>BEST / WORST TRADE</span>
+              <span>🏆</span>
+            </div>
+            <div className="my-1 flex flex-col gap-0.5 text-[11px]">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400 truncate max-w-[50px]">{stats.bestTrade?.symbol || 'N/A'}:</span>
+                <b className="text-binance-green">+{formatPrice(stats.bestTrade?.net_pnl_usd || 0)}</b>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400 truncate max-w-[50px]">{stats.worstTrade?.symbol || 'N/A'}:</span>
+                <b className="text-binance-red">{formatPrice(stats.worstTrade?.net_pnl_usd || 0)}</b>
+              </div>
+            </div>
+            <div className="text-[10px] pt-1 border-t border-binance-border/60 text-slate-400 text-center">
+              Bảo toàn R:R kỷ luật
+            </div>
+          </div>
+
+        </section>
+
+
+        {/* ── SECTION B: TRADING PERFORMANCE CALENDAR (LỊCH PNL THEO NGÀY) ── */}
+        <section className="bg-binance-panel border border-binance-border rounded-xl p-4 md:p-5 flex flex-col gap-4 shadow-xl">
+          
+          {/* Calendar Header Controls */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-binance-border pb-3.5">
+            <div className="flex items-center gap-3">
+              <span className="font-extrabold text-sm md:text-base text-white flex items-center gap-2">
+                <span>📅 LỊCH GIAO DỊCH & PNL THEO NGÀY</span>
+                <span className="text-xs text-binance-yellow capitalize font-mono font-bold bg-binance-card px-2.5 py-0.5 rounded-lg border border-binance-border">
+                  {monthName}
+                </span>
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 font-mono text-xs self-end sm:self-auto">
+              {selectedDateFilter && (
+                <button
+                  className="bg-binance-yellow/20 text-binance-yellow border border-binance-yellow/40 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 transition"
+                  onClick={() => setSelectedDateFilter(null)}
+                  title="Hiển thị lại toàn bộ ngày trong tháng"
+                >
+                  <span>✕ Đang lọc ngày {selectedDateFilter}</span>
+                </button>
+              )}
+
+              <div className="flex items-center bg-binance-card border border-binance-border rounded-lg p-0.5 gap-1">
+                <button
+                  className="px-2.5 py-1 rounded hover:bg-binance-hover text-slate-300 font-bold transition"
+                  onClick={prevMonth}
+                  title="Tháng trước"
+                >
+                  ◀
+                </button>
+                <button
+                  className="px-2.5 py-1 rounded hover:bg-binance-hover text-white font-bold transition text-[11px]"
+                  onClick={resetToToday}
+                  title="Về tháng hiện tại"
+                >
+                  Hôm nay
+                </button>
+                <button
+                  className="px-2.5 py-1 rounded hover:bg-binance-hover text-slate-300 font-bold transition"
+                  onClick={nextMonth}
+                  title="Tháng sau"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Weekday Names Header */}
+          <div className="grid grid-cols-7 gap-1.5 text-center font-mono font-bold text-[11px] text-slate-400">
+            {['Thứ 2 (Mon)', 'Thứ 3 (Tue)', 'Thứ 4 (Wed)', 'Thứ 5 (Thu)', 'Thứ 6 (Fri)', 'Thứ 7 (Sat)', 'Chủ Nhật (Sun)'].map(d => (
+              <div key={d} className="py-1 bg-binance-subpanel/60 rounded border border-binance-border/50 text-[10.5px]">
+                {d}
+              </div>
+            ))}
+          </div>
+
+          {/* Calendar Day Grid */}
+          <div className="grid grid-cols-7 gap-1.5">
+            {calendarDays.map((cell, idx) => {
+              if (!cell.day) {
+                return (
+                  <div key={`empty_${idx}`} className="min-h-[72px] md:min-h-[84px] rounded-lg bg-slate-900/20 border border-slate-800/30 opacity-40"></div>
+                );
+              }
+
+              const hasTrades = cell.trades.length > 0;
+              const isProfit = cell.pnl > 0;
+              const isLoss = cell.pnl < 0;
+              const isSelected = selectedDateFilter === cell.dateKey;
+
+              let cardBg = 'bg-binance-card/60 border-binance-border/70 hover:border-slate-500';
+              let pnlColor = 'text-slate-400';
+
+              if (hasTrades) {
+                if (isProfit) {
+                  cardBg = 'bg-gradient-to-br from-emerald-950/60 to-emerald-900/40 border-emerald-500/60 shadow-lg shadow-emerald-950/30 hover:border-emerald-400';
+                  pnlColor = 'text-emerald-400 font-black';
+                } else if (isLoss) {
+                  cardBg = 'bg-gradient-to-br from-rose-950/60 to-rose-900/40 border-rose-500/60 shadow-lg shadow-rose-950/30 hover:border-rose-400';
+                  pnlColor = 'text-rose-400 font-black';
+                } else {
+                  cardBg = 'bg-slate-900/80 border-slate-700/60 hover:border-slate-500';
+                  pnlColor = 'text-slate-300 font-bold';
+                }
+              }
+
+              if (isSelected) {
+                cardBg += ' ring-2 ring-binance-yellow border-binance-yellow scale-[1.02] z-10';
+              }
+
+              return (
+                <div
+                  key={cell.dateKey}
+                  onClick={() => hasTrades && setSelectedDateFilter(isSelected ? null : cell.dateKey)}
+                  className={`min-h-[72px] md:min-h-[84px] p-2 rounded-lg border transition flex flex-col justify-between select-none ${cardBg} ${hasTrades ? 'cursor-pointer' : 'cursor-default'}`}
+                  title={hasTrades ? `Xem ${cell.trades.length} lệnh của ngày ${cell.dateKey}` : `Không có giao dịch ngày ${cell.dateKey}`}
+                >
+                  {/* Top: Day Number & Trade Count Pill */}
+                  <div className="flex items-center justify-between font-mono">
+                    <span className={`text-xs font-bold ${hasTrades ? 'text-white' : 'text-slate-500'}`}>
+                      {cell.day}
+                    </span>
+                    {hasTrades && (
+                      <span className="text-[9.5px] px-1.5 py-0.2 rounded-full font-bold bg-black/50 border border-white/10 text-slate-300">
+                        {cell.trades.length} {cell.trades.length === 1 ? 'lệnh' : 'lệnh'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Bottom: Daily PnL & Win/Loss Count */}
+                  {hasTrades ? (
+                    <div className="flex flex-col gap-0.5 mt-1 font-mono">
+                      <span className={`text-xs md:text-sm tracking-tight ${pnlColor}`}>
+                        {isProfit ? '+' : ''}${formatPrice(cell.pnl)}
+                      </span>
+                      <div className="flex items-center justify-between text-[9px] text-slate-400">
+                        <span className="text-emerald-400 font-bold">{cell.wins}W</span>
+                        <span className="text-rose-400 font-bold">{cell.losses}L</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[9.5px] text-slate-600 font-mono mt-2">
+                      --
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+        </section>
+
+
+        {/* ── SECTION C: CHI TIẾT DANH SÁCH LỆNH & ENTRY FORENSICS ── */}
+        <section className="bg-binance-panel border border-binance-border rounded-xl flex flex-col overflow-hidden shadow-xl">
+          
+          {/* Table Header Controls */}
+          <div className="p-4 border-b border-binance-border bg-binance-subpanel flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-extrabold text-sm text-white flex items-center gap-2">
+                <span>📋 BÁO CÁO CHI TIẾT TỪNG LỆNH & ENTRY</span>
+                <span className="bg-binance-yellow text-black text-xs px-2 py-0.5 rounded-full font-black font-mono">
+                  {filteredTrades.length}
+                </span>
+              </span>
+
+              {/* Status Filter Tabs */}
+              <div className="flex items-center bg-binance-bg border border-binance-border rounded-lg p-0.5 gap-0.5 text-xs font-mono">
+                {[
+                  { id: 'ALL', label: `Tất Cả (${trades.length})` },
+                  { id: 'WIN', label: `🟢 Thắng (${stats.wins})` },
+                  { id: 'LOSS', label: `🔴 Thua (${stats.losses})` },
+                  { id: 'ACTIVE', label: `⚡ Đang Mở (${stats.activeCount})` }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    className={`px-2.5 py-1 rounded font-bold transition ${statusFilter === tab.id ? 'bg-binance-active text-binance-yellow shadow' : 'text-slate-400 hover:text-white'}`}
+                    onClick={() => setStatusFilter(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="relative flex-1 md:w-64">
+                <input
+                  type="text"
+                  placeholder="Tìm Symbol, Chiến lược, Ghi chú..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full bg-binance-bg border border-binance-border rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-binance-yellow"
+                />
+                {searchQuery && (
+                  <button
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <button
+                className="bg-binance-subpanel hover:bg-binance-hover px-2.5 py-1.5 rounded-lg border border-binance-border text-xs font-bold text-slate-200 transition"
+                onClick={fetchJournal}
+                title="Tải lại dữ liệu từ Server"
+              >
+                🔄
+              </button>
+            </div>
+          </div>
+
+          {/* Table Container */}
+          <div className="overflow-x-auto max-h-[550px]">
+            <table className="w-full text-left font-mono text-[11px] border-collapse">
+              <thead className="bg-[#0B0E17] text-slate-400 sticky top-0 z-10 border-b border-binance-border uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="py-2.5 px-3">Thời Gian</th>
+                  <th className="py-2.5 px-3">Symbol / Sàn</th>
+                  <th className="py-2.5 px-3">Vị Thế</th>
+                  <th className="py-2.5 px-3">Entry → Exit Price</th>
+                  <th className="py-2.5 px-3">Quy Mô / Vốn</th>
+                  <th className="py-2.5 px-3">Lợi Nhuận (PnL)</th>
+                  <th className="py-2.5 px-3">Kết Quả</th>
+                  <th className="py-2.5 px-3">Chiến Lược & Rationale</th>
+                  <th className="py-2.5 px-3">Ghi Chú</th>
+                  <th className="py-2.5 px-3 text-right">Thao Tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-binance-border/40">
+                {loading ? (
+                  <tr>
+                    <td colSpan="10" className="py-12 text-center text-slate-400">
+                      <span className="animate-spin inline-block mr-2 text-base">⚡</span>
+                      Đang tải dữ liệu nhật ký giao dịch...
+                    </td>
+                  </tr>
+                ) : filteredTrades.length === 0 ? (
+                  <tr>
+                    <td colSpan="10" className="py-12 text-center text-slate-400">
+                      <span className="text-2xl block mb-1">📭</span>
+                      Không có giao dịch nào khớp với bộ lọc hiện tại.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTrades.map(trade => {
+                    const isLong = (trade.direction || '').toUpperCase() === 'LONG';
+                    const pnl = Number(trade.net_pnl_usd) || 0;
+                    const isWin = pnl > 0;
+                    const isLoss = pnl < 0;
+                    const isActive = trade.status === 'ACTIVE';
+
+                    return (
+                      <tr
+                        key={trade.id}
+                        className="hover:bg-binance-hover/50 transition cursor-pointer"
+                        onClick={() => onOpenForensics && onOpenForensics(trade)}
+                      >
+                        {/* 1. Time */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="text-white font-bold block">
+                            {trade.open_time ? new Date(trade.open_time).toLocaleDateString() : '--'}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {trade.open_time ? new Date(trade.open_time).toLocaleTimeString() : ''}
+                          </span>
+                        </td>
+
+                        {/* 2. Symbol & Exchange */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="font-extrabold text-white text-xs block">{trade.symbol}</span>
+                          <span className="text-[9.5px] bg-binance-card px-1.5 py-0.2 rounded border border-binance-borderSubtle font-bold text-binance-textSec">
+                            {trade.exchange || 'BINANCE'}
+                          </span>
+                        </td>
+
+                        {/* 3. Side & Leverage */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-2 py-0.5 rounded font-extrabold text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green border border-binance-green/40' : 'bg-binance-red/20 text-binance-red border border-binance-red/40'}`}>
+                              {isLong ? '▲ LONG' : '▼ SHORT'}
+                            </span>
+                            <span className="text-[10px] text-binance-yellow font-bold bg-binance-bg px-1.5 py-0.5 rounded border border-binance-border">
+                              {trade.leverage || 20}x
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 4. Entry -> Exit Price */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="text-white font-bold block">
+                            ${formatPrice(trade.entry_price)}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            → {isActive ? <b className="text-binance-yellowHover">${formatPrice(trade.current_price || trade.entry_price)} (Live)</b> : `$${formatPrice(trade.exit_price || trade.current_price || trade.entry_price)}`}
+                          </span>
+                        </td>
+
+                        {/* 5. Pos Size / Margin */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="text-white block font-bold">${formatPrice(trade.pos_size_usd)}</span>
+                          <span className="text-[10px] text-slate-400">Ký quỹ: ${formatPrice(trade.initial_margin)}</span>
+                        </td>
+
+                        {/* 6. PnL & ROE */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={`font-black text-xs block ${isActive ? (pnl >= 0 ? 'text-binance-green' : 'text-binance-red') : (isWin ? 'text-binance-green' : isLoss ? 'text-binance-red' : 'text-slate-300')}`}>
+                            {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {trade.roe_pct !== undefined ? `${trade.roe_pct >= 0 ? '+' : ''}${Number(trade.roe_pct).toFixed(2)}% ROE` : ''}
+                          </span>
+                        </td>
+
+                        {/* 7. Outcome */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          {isActive ? (
+                            <span className="bg-binance-cyan/20 text-binance-cyan border border-binance-cyan/40 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              ⚡ Đang Chạy
+                            </span>
+                          ) : isWin ? (
+                            <span className="bg-emerald-950 text-emerald-400 border border-emerald-600/50 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              ✓ {trade.exit_reason || trade.status || 'Chốt Lãi'}
+                            </span>
+                          ) : (
+                            <span className="bg-rose-950 text-rose-400 border border-rose-600/50 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              ✕ {trade.exit_reason || trade.status || 'Dừng Lỗ'}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 8. Strategy & Rationale */}
+                        <td className="py-2.5 px-3 max-w-[200px] truncate">
+                          <span className="text-slate-200 block font-bold truncate">
+                            {trade.strategy_name || 'STAT2 Box Strategy'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 truncate block">
+                            {trade.entry_rationale || trade.market_regime || 'SMC Liquidity & FVG Retest'}
+                          </span>
+                        </td>
+
+                        {/* 9. Notes */}
+                        <td className="py-2.5 px-3 max-w-[160px] truncate text-slate-300">
+                          {trade.notes ? (
+                            <span className="text-binance-yellow bg-binance-yellow/10 border border-binance-yellow/30 px-2 py-0.5 rounded text-[10px] block truncate">
+                              📝 {trade.notes}
+                            </span>
+                          ) : (
+                            <span className="text-slate-600 italic text-[10px]">(Chưa có)</span>
+                          )}
+                        </td>
+
+                        {/* 10. Actions */}
+                        <td className="py-2.5 px-3 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              className="bg-binance-card hover:bg-binance-hover text-binance-cyan border border-binance-border px-2 py-1 rounded text-[10.5px] font-bold transition shadow"
+                              onClick={() => onOpenForensics && onOpenForensics(trade)}
+                              title="Xem phân tích chi tiết & forensics của lệnh này"
+                            >
+                              🔍 Chi Tiết
+                            </button>
+                            <button
+                              className="bg-binance-subpanel hover:bg-binance-hover text-white border border-binance-border px-2 py-1 rounded text-[10.5px] font-bold transition shadow"
+                              onClick={() => onSelectSymbol && onSelectSymbol(trade.symbol, trade.exchange)}
+                              title="Mở biểu đồ của Symbol này trên màn hình chính"
+                            >
+                              📈 Chart
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+        </section>
+
+      </div>
+
+      {/* ── 3. INLINE JSON VIEWER MODAL ── */}
+      {isJsonModalOpen && (
+        <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setIsJsonModalOpen(false)}>
+          <div className="bg-[#0B0E17] border border-binance-borderHighlight rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            
+            <div className="p-3.5 border-b border-binance-border bg-[#0D111C] flex items-center justify-between font-mono">
+              <span className="font-extrabold text-sm text-binance-yellow flex items-center gap-2">
+                <span>📄 TRADING JOURNAL RAW JSON REPORT</span>
+                <span className="text-xs text-slate-400">({trades.length} Trades)</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  className="bg-binance-cyan/20 text-binance-cyan border border-binance-cyan/40 px-3 py-1 rounded text-xs font-bold transition"
+                  onClick={handleExportJson}
+                >
+                  📥 Tải File JSON
+                </button>
+                <button
+                  className="bg-binance-subpanel hover:bg-binance-hover text-white border border-binance-border px-3 py-1 rounded text-xs font-bold transition"
+                  onClick={handleCopyJson}
+                >
+                  {copiedToast ? '✅ Đã Copy!' : '📋 Copy JSON'}
+                </button>
+                <button
+                  className="text-slate-400 hover:text-white text-lg px-2"
+                  onClick={() => setIsJsonModalOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 p-4 overflow-auto bg-[#07090F] font-mono text-[11px] text-emerald-400 leading-relaxed select-text">
+              <pre>{JSON.stringify(fullJsonReport, null, 2)}</pre>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ── 4. INITIAL SETUP WIZARD COMPONENT (TRÌNH HƯỚNG DẪN CÀI ĐẶT MỚI) ──
+function SetupWizardModal({ isOpen, onClose, onCompleted }) {
+  if (!isOpen) return null;
+
+  const [step, setStep] = useState(1); // 1: DB & Vốn, 2: Rủi Ro & SL/TP, 3: Sàn Giao Dịch, 4: Tổng Hợp & Khởi Chạy
+  const [isApplying, setIsApplying] = useState(false);
+  const [applyLogs, setApplyLogs] = useState([]);
+  const [isSuccess, setIsSuccess] = useState(false);
+
+  // Form States
+  const [resetTables, setResetTables] = useState(true);
+  const [initialBalance, setInitialBalance] = useState(1000.0);
+  const [riskPct, setRiskPct] = useState(1.0);
+  const [maxLeverage, setMaxLeverage] = useState(20);
+  const [marginMode, setMarginMode] = useState('ISOLATED');
+  const [tp1Ratio, setTp1Ratio] = useState(1.5);
+  const [tp1ClosePct, setTp1ClosePct] = useState(50);
+  const [autoBreakeven, setAutoBreakeven] = useState(true);
+  const [tp2Ratio, setTp2Ratio] = useState(3.0);
+  const [maxConcurrentPositions, setMaxConcurrentPositions] = useState(5);
+  const [dailyDrawdownPct, setDailyDrawdownPct] = useState(4.0);
+
+  // Exchange Selection (6 Top Exchanges)
+  const [enabledExchanges, setEnabledExchanges] = useState({
+    BINANCE: true,
+    BYBIT: true,
+    OKX: true,
+    BITGET: true,
+    GATE: true,
+    BINGX: true
+  });
+  const [autoSeedSymbols, setAutoSeedSymbols] = useState(true);
+
+  const toggleExchange = (ex) => {
+    setEnabledExchanges(prev => ({ ...prev, [ex]: !prev[ex] }));
+  };
+
+  const activeExchangesList = Object.keys(enabledExchanges).filter(k => enabledExchanges[k]);
+
+  const handleExecuteWizard = async () => {
+    setIsApplying(true);
+    setApplyLogs(['[1/4] 🚀 Đang khởi tạo Trình Hướng Dẫn Cài Đặt Mới (Setup Wizard)...']);
+    
+    try {
+      setApplyLogs(prev => [...prev, `[2/4] 💾 Khởi tạo cấu trúc bảng SQLite & thiết lập vốn ban đầu: $${initialBalance}...`]);
+      
+      const payload = {
+        resetTables,
+        initialBalance: Number(initialBalance),
+        riskPct: Number(riskPct),
+        maxLeverage: Number(maxLeverage),
+        marginMode,
+        tp1Ratio: Number(tp1Ratio),
+        tp1ClosePct: Number(tp1ClosePct),
+        autoBreakeven,
+        tp2Ratio: Number(tp2Ratio),
+        maxConcurrentPositions: Number(maxConcurrentPositions),
+        dailyDrawdownPct: Number(dailyDrawdownPct),
+        enabledExchanges: activeExchangesList,
+        autoSeedSymbols
+      };
+
+      setApplyLogs(prev => [...prev, `[3/4] 🛡️ Áp dụng mô hình quản lý rủi ro cố định ${riskPct}% (Đòn bẩy ${maxLeverage}x, Breakeven ${autoBreakeven ? 'BẬT' : 'TẮT'})...`]);
+      setApplyLogs(prev => [...prev, `[4/4] 🌐 Khám phá và nạp 90% symbol perpetual cho ${activeExchangesList.length} sàn được kích hoạt qua CCXT Pro...`]);
+
+      const res = await fetch('/api/wizard/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(r => r.json());
+
+      if (res.success) {
+        setApplyLogs(prev => [
+          ...prev,
+          '🔄 [AUTO-REBOOT] Đang tự động khởi động lại dịch vụ máy chủ, nạp lại cấu hình SQLite và đồng bộ giá WebSocket 6 sàn...',
+          '🎉 THIẾT LẬP HOÀN TẤT THÀNH CÔNG! Máy chủ đã áp dụng toàn bộ cấu hình mới và Scanner 24/7 đang chạy.'
+        ]);
+        setIsSuccess(true);
+        setTimeout(() => {
+          if (onCompleted) onCompleted();
+        }, 2200);
+      } else {
+        setApplyLogs(prev => [...prev, `❌ Lỗi thiết lập: ${res.error}`]);
+      }
+    } catch (e) {
+      setApplyLogs(prev => [...prev, `❌ Lỗi kết nối máy chủ: ${e.message}`]);
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 font-sans text-xs text-slate-200" onClick={onClose}>
+      <div className="bg-[#0B0E17] border border-binance-borderHighlight rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+        
+        {/* Header with Step Wizard Breadcrumbs */}
+        <div className="p-4 border-b border-binance-border bg-[#0E1320] flex items-center justify-between font-mono shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl">🧙‍♂️</span>
+            <div>
+              <span className="font-extrabold text-sm sm:text-base text-white block">TRÌNH HƯỚNG DẪN CÀI ĐẶT MỚI (SETUP WIZARD)</span>
+              <span className="text-[10.5px] text-slate-400">Khởi tạo SQLite, Quản lý rủi ro 1% và Kích hoạt 6 Sàn Phái Sinh</span>
+            </div>
+          </div>
+          <button className="text-slate-400 hover:text-white text-base w-7 h-7 rounded bg-binance-subpanel flex items-center justify-center" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Step Indicator Tabs */}
+        <div className="grid grid-cols-4 border-b border-binance-border bg-[#080B11] text-[11px] font-mono text-center">
+          {[
+            { num: 1, label: '1. DB & Vốn' },
+            { num: 2, label: '2. Quản Lý Rủi Ro' },
+            { num: 3, label: '3. Chọn 6 Sàn' },
+            { num: 4, label: '4. Xác Nhận & Chạy' }
+          ].map(s => (
+            <button
+              key={s.num}
+              disabled={isApplying}
+              onClick={() => setStep(s.num)}
+              className={`py-2.5 px-1 font-bold border-b-2 transition ${step === s.num ? 'border-binance-yellow text-binance-yellow bg-[#121824]' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Scrollable Wizard Body */}
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1 flex flex-col gap-4 text-xs font-mono">
+          
+          {/* ── BƯỚC 1: KHỞI TẠO DB & SỐ DƯ VỐN ── */}
+          {step === 1 && (
+            <div className="flex flex-col gap-4">
+              <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3">
+                <span className="text-2xl">💾</span>
+                <div>
+                  <b className="text-white text-sm block mb-1">Khởi Tạo Cơ Sở Dữ Liệu SQLite & Cấu Trúc Bảng</b>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Hệ thống sẽ tự động khởi tạo các bảng `trade_positions`, `whitelist_symbols`, `symbol_strategies`, `chart_drawings`, `order_notes` với chuẩn SQLite WAL Mode tối ưu hóa ghi nhanh 60 FPS.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetTables}
+                    onChange={e => setResetTables(e.target.checked)}
+                    className="w-4 h-4 accent-binance-yellow rounded cursor-pointer"
+                  />
+                  <div>
+                    <b className="text-white">Làm sạch & Tạo mới toàn bộ dữ liệu bảng SQLite (Clean Reset)</b>
+                    <span className="text-slate-400 text-[10px] block">Xóa dữ liệu cũ, đặt lại các bảng về trạng thái xuất xưởng sạch sẽ.</span>
+                  </div>
+                </label>
+
+                <div className="pt-2 border-t border-binance-border/60 flex flex-col gap-2">
+                  <label className="text-slate-300 font-bold">Số Dư Vốn Ban Đầu Khởi Tạo ($ Wallet Balance):</label>
+                  <div className="flex items-center gap-2">
+                    {[500, 1000, 2000, 5000, 10000].map(val => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={`px-3 py-1.5 rounded font-bold border transition ${initialBalance === val ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-subpanel text-slate-300 border-binance-border hover:text-white'}`}
+                        onClick={() => setInitialBalance(val)}
+                      >
+                        ${val.toLocaleString()}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-slate-400 text-[11px]">Hoặc nhập tùy chọn:</span>
+                    <input
+                      type="number"
+                      value={initialBalance}
+                      onChange={e => setInitialBalance(parseFloat(e.target.value) || 0)}
+                      className="bg-[#090D16] border border-binance-border rounded px-3 py-1 text-white font-bold w-36 focus:outline-none focus:border-binance-yellow"
+                    />
+                    <span className="text-slate-400">USD</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── BƯỚC 2: QUẢN TRỊ RỦI RO & VỐN ── */}
+          {step === 2 && (
+            <div className="flex flex-col gap-4">
+              <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3">
+                <span className="text-2xl">🛡️</span>
+                <div>
+                  <b className="text-white text-sm block mb-1">Cấu Hình Mô Hình Quản Trị Rủi Ro & Kích Thước Vị Thế (Money Management)</b>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Hệ thống tính Size lệnh theo mô hình <b>Fixed Fractional Risk Model</b>. Tự động chia nhỏ lệnh chốt lời TP1 (chốt 50%), dời Stop Loss về hòa vốn (Auto Breakeven) và chốt lời TP2.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                
+                {/* Risk % per trade */}
+                <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
+                  <span className="text-binance-yellow font-bold">% Rủi Ro Mỗi Lệnh (Risk Per Trade):</span>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[0.5, 1.0, 1.5, 2.0].map(r => (
+                      <button
+                        key={r}
+                        type="button"
+                        className={`py-1 rounded font-bold border text-center transition ${riskPct === r ? 'bg-binance-yellow text-black border-binance-yellow' : 'bg-binance-subpanel text-slate-300 border-binance-border'}`}
+                        onClick={() => setRiskPct(r)}
+                      >
+                        {r}%
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[10px] text-slate-400">Khuyến nghị 1.0%: Mỗi lệnh tối đa mất ${((initialBalance * riskPct) / 100).toFixed(2)} khi chạm SL.</span>
+                </div>
+
+                {/* Leverage & Margin */}
+                <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
+                  <span className="text-white font-bold">Đòn Bẩy & Ký Quỹ (Leverage & Margin):</span>
+                  <div className="flex items-center gap-2">
+                    {[10, 20, 50].map(lev => (
+                      <button
+                        key={lev}
+                        type="button"
+                        className={`px-2.5 py-1 rounded font-bold border transition ${maxLeverage === lev ? 'bg-binance-yellow text-black border-binance-yellow' : 'bg-binance-subpanel text-slate-300 border-binance-border'}`}
+                        onClick={() => setMaxLeverage(lev)}
+                      >
+                        {lev}x
+                      </button>
+                    ))}
+                    <select
+                      value={marginMode}
+                      onChange={e => setMarginMode(e.target.value)}
+                      className="bg-[#090D16] border border-binance-border rounded px-2 py-1 text-white font-bold focus:outline-none"
+                    >
+                      <option value="ISOLATED">ISOLATED</option>
+                      <option value="CROSSED">CROSSED</option>
+                    </select>
+                  </div>
+                  <span className="text-[10px] text-slate-400">Isolated Margin giúp cách ly hoàn toàn rủi ro từng lệnh.</span>
+                </div>
+
+                {/* TP1 & Breakeven */}
+                <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
+                  <span className="text-binance-green font-bold">Take Profit 1 (TP1) & Auto Breakeven:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400 text-[11px]">Tỷ lệ TP1:</span>
+                    <select
+                      value={tp1Ratio}
+                      onChange={e => setTp1Ratio(parseFloat(e.target.value))}
+                      className="bg-[#090D16] border border-binance-border rounded px-2 py-1 text-white font-bold focus:outline-none"
+                    >
+                      <option value="1.0">1.0R</option>
+                      <option value="1.5">1.5R (Chuẩn)</option>
+                      <option value="2.0">2.0R</option>
+                    </select>
+                    <span className="text-slate-400 text-[11px]">Đóng:</span>
+                    <span className="text-white font-bold">50%</span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer mt-1">
+                    <input
+                      type="checkbox"
+                      checked={autoBreakeven}
+                      onChange={e => setAutoBreakeven(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-binance-green rounded cursor-pointer"
+                    />
+                    <span className="text-[10.5px] text-slate-300">Tự động dời SL về hòa vốn (+0.05% phí) ngay khi khớp TP1</span>
+                  </label>
+                </div>
+
+                {/* TP2 & Max Positions */}
+                <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
+                  <span className="text-binance-cyan font-bold">Take Profit 2 (TP2) & Giới Hạn Lệnh:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400 text-[11px]">Tỷ lệ TP2:</span>
+                    <select
+                      value={tp2Ratio}
+                      onChange={e => setTp2Ratio(parseFloat(e.target.value))}
+                      className="bg-[#090D16] border border-binance-border rounded px-2 py-1 text-white font-bold focus:outline-none"
+                    >
+                      <option value="2.5">2.5R</option>
+                      <option value="3.0">3.0R (Chuẩn)</option>
+                      <option value="4.0">4.0R</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-slate-400 text-[11px]">Tối đa lệnh mở cùng lúc:</span>
+                    <select
+                      value={maxConcurrentPositions}
+                      onChange={e => setMaxConcurrentPositions(parseInt(e.target.value))}
+                      className="bg-[#090D16] border border-binance-border rounded px-2 py-1 text-white font-bold focus:outline-none"
+                    >
+                      <option value="3">3 lệnh (3% rủi ro)</option>
+                      <option value="5">5 lệnh (5% rủi ro)</option>
+                      <option value="10">10 lệnh (10% rủi ro)</option>
+                    </select>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* ── BƯỚC 3: LỰA CHỌN DANH SÁCH 6 SÀN ── */}
+          {step === 3 && (
+            <div className="flex flex-col gap-4">
+              <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3">
+                <span className="text-2xl">🌐</span>
+                <div>
+                  <b className="text-white text-sm block mb-1">Lựa Chọn & Kích Hoạt Danh Sách Sàn Giao Dịch Phái Sinh</b>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Bật/Tắt các sàn giao dịch mong muốn. Hệ thống sẽ tự động quét, lọc thanh khoản và nạp <b>top 90% hợp đồng USDT Perpetual</b> của các sàn được chọn.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                {[
+                  { id: 'BINANCE', name: 'Binance Futures', icon: '🔶', approx: '~631 Perps', desc: 'USDT-M Perpetual' },
+                  { id: 'BYBIT', name: 'Bybit Linear', icon: '⬛', approx: '~655 Perps', desc: 'Linear V5 Perpetual' },
+                  { id: 'OKX', name: 'OKX Perpetual', icon: '🔷', approx: '~394 Perps', desc: 'USDT Perpetual Swap' },
+                  { id: 'BITGET', name: 'Bitget Perpetual', icon: '🔵', approx: '~684 Perps', desc: 'USDT-M Perpetual' },
+                  { id: 'GATE', name: 'Gate.io Perpetual', icon: '🚪', approx: '~843 Perps', desc: 'USDT Perpetual' },
+                  { id: 'BINGX', name: 'BingX Perpetual', icon: '💠', approx: '~738 Perps', desc: 'Swap Perpetual' }
+                ].map(ex => {
+                  const isChecked = !!enabledExchanges[ex.id];
+                  return (
+                    <div
+                      key={ex.id}
+                      onClick={() => toggleExchange(ex.id)}
+                      className={`p-3 rounded-lg border cursor-pointer transition flex flex-col justify-between gap-2 ${isChecked ? 'bg-[#111726] border-binance-yellow shadow-md shadow-binance-yellow/10' : 'bg-[#090D16] border-binance-border opacity-50'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-white flex items-center gap-1.5">
+                          <span>{ex.icon}</span>
+                          <span>{ex.name}</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {}}
+                          className="w-4 h-4 accent-binance-yellow cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-binance-yellow font-bold text-[11px] block">{ex.approx}</span>
+                        <span className="text-slate-400 text-[10px]">{ex.desc}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoSeedSymbols}
+                    onChange={e => setAutoSeedSymbols(e.target.checked)}
+                    className="w-4 h-4 accent-binance-yellow rounded cursor-pointer"
+                  />
+                  <div>
+                    <b className="text-white">Tự động nạp 90% symbol perpetual qua CCXT Pro sau khi hoàn tất</b>
+                    <span className="text-slate-400 text-[10px] block">Lọc danh sách hợp đồng theo khối lượng thanh khoản 24h thực tế.</span>
+                  </div>
+                </label>
+                <span className="text-binance-cyan font-bold text-xs">{activeExchangesList.length} / 6 Sàn Đã Bật</span>
+              </div>
+            </div>
+          )}
+
+          {/* ── BƯỚC 4: TỔNG HỢP & KHỞI CHẠY ── */}
+          {step === 4 && (
+            <div className="flex flex-col gap-4">
+              <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3">
+                <span className="text-2xl">✨</span>
+                <div>
+                  <b className="text-white text-sm block mb-1">Xác Nhận Cấu Hình & Khởi Chạy Hệ Thống</b>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Kiểm tra lại toàn bộ thông số đã thiết lập trước khi áp dụng vào cơ sở dữ liệu SQLite và khởi động hệ thống.
+                  </p>
+                </div>
+              </div>
+
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-2.5 bg-[#111726] rounded border border-binance-border">
+                  <span className="text-slate-400 text-[10px] block font-bold">VỐN KHỞI TẠO:</span>
+                  <span className="text-white font-extrabold text-base">${Number(initialBalance).toLocaleString()}</span>
+                </div>
+                <div className="p-2.5 bg-[#111726] rounded border border-binance-border">
+                  <span className="text-slate-400 text-[10px] block font-bold">MỨC RỦI RO:</span>
+                  <span className="text-binance-yellow font-extrabold text-base">{riskPct}% / Lệnh</span>
+                </div>
+                <div className="p-2.5 bg-[#111726] rounded border border-binance-border">
+                  <span className="text-slate-400 text-[10px] block font-bold">SL / TP1 / TP2:</span>
+                  <span className="text-emerald-400 font-extrabold text-xs">TP1: {tp1Ratio}R | TP2: {tp2Ratio}R</span>
+                </div>
+                <div className="p-2.5 bg-[#111726] rounded border border-binance-border">
+                  <span className="text-slate-400 text-[10px] block font-bold">SÀN KÍCH HOẠT:</span>
+                  <span className="text-binance-cyan font-extrabold text-base">{activeExchangesList.length} Sàn</span>
+                </div>
+              </div>
+
+              {/* Live Execution Logs */}
+              {applyLogs.length > 0 && (
+                <div className="p-3 bg-[#080B11] rounded-lg border border-binance-border font-mono text-[11px] flex flex-col gap-1 max-h-40 overflow-y-auto">
+                  {applyLogs.map((log, idx) => (
+                    <div key={idx} className="text-emerald-400">{log}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Action Button */}
+              {!isSuccess && (
+                <button
+                  disabled={isApplying || activeExchangesList.length === 0}
+                  onClick={handleExecuteWizard}
+                  className="w-full py-3 bg-gradient-to-r from-binance-yellow to-amber-500 hover:from-binance-yellowHover hover:to-amber-400 text-black font-extrabold text-sm rounded-lg transition shadow-lg flex items-center justify-center gap-2"
+                >
+                  <span>{isApplying ? '⏳ Đang Thiết Lập Hệ Thống...' : '🚀 ÁP DỤNG CÀI ĐẶT & KHỞI CHẠY HỆ THỐNG'}</span>
+                </button>
+              )}
+            </div>
+          )}
+
+        </div>
+
+        {/* Footer Navigation Buttons */}
+        <div className="p-3 border-t border-binance-border bg-[#0E1320] flex items-center justify-between shrink-0 font-mono">
+          <div>
+            {step > 1 && (
+              <button
+                disabled={isApplying}
+                className="bg-binance-subpanel hover:bg-binance-hover px-4 py-1.5 rounded-lg text-xs font-bold text-white border border-binance-border transition"
+                onClick={() => setStep(step - 1)}
+              >
+                ← Quay Lại
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={isApplying}
+              className="bg-binance-subpanel hover:bg-binance-hover px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white border border-binance-border"
+              onClick={onClose}
+            >
+              Hủy
+            </button>
+            {step < 4 ? (
+              <button
+                className="bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-4 py-1.5 rounded-lg text-xs transition"
+                onClick={() => setStep(step + 1)}
+              >
+                Tiếp Tục →
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 // ── ROOT APPLICATION COMPONENT ──
 function App() {
   const [selectedExchange, setSelectedExchange] = useState('ALL');
@@ -2572,6 +4007,8 @@ function App() {
   // Modals
   const [forensicsData, setForensicsData] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isJournalOpen, setIsJournalOpen] = useState(false);
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
 
   const wsRef = useRef(null);
 
@@ -2794,6 +4231,9 @@ function App() {
   const countBinance = whitelist.filter(w => (w.exchange || 'BINANCE') === 'BINANCE').length;
   const countBybit = whitelist.filter(w => w.exchange === 'BYBIT').length;
   const countOkx = whitelist.filter(w => w.exchange === 'OKX').length;
+  const countBitget = whitelist.filter(w => w.exchange === 'BITGET').length;
+  const countGate = whitelist.filter(w => w.exchange === 'GATE').length;
+  const countBingx = whitelist.filter(w => w.exchange === 'BINGX').length;
 
   return (
     <>
@@ -2826,16 +4266,19 @@ function App() {
             </div>
 
             {/* Desktop & Tablet Exchange Filter Tabs */}
-            <div className="hidden md:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5">
+            <div className="hidden md:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 overflow-x-auto">
               {[
                 { id: 'ALL', label: `🌐 ALL (${countAll})` },
                 { id: 'BINANCE', label: `🔶 Binance (${countBinance})` },
                 { id: 'BYBIT', label: `⬛ Bybit (${countBybit})` },
-                { id: 'OKX', label: `🔷 OKX (${countOkx})` }
+                { id: 'OKX', label: `🔷 OKX (${countOkx})` },
+                { id: 'BITGET', label: `🔵 Bitget (${countBitget})` },
+                { id: 'GATE', label: `🚪 Gate (${countGate})` },
+                { id: 'BINGX', label: `💠 BingX (${countBingx})` }
               ].map(tab => (
                 <button
                   key={tab.id}
-                  className={`px-2 py-0.5 rounded text-[10.5px] font-bold transition ${selectedExchange === tab.id ? 'bg-binance-active text-binance-yellow' : 'text-binance-textSec hover:text-white'}`}
+                  className={`px-2 py-0.5 rounded text-[10.5px] font-bold transition whitespace-nowrap ${selectedExchange === tab.id ? 'bg-binance-active text-binance-yellow shadow' : 'text-binance-textSec hover:text-white'}`}
                   onClick={() => setSelectedExchange(tab.id)}
                 >
                   {tab.label}
@@ -2865,17 +4308,39 @@ function App() {
             {/* Quick Actions */}
             <div className="flex items-center gap-1 pl-1 md:pl-2 border-l border-binance-border">
               <span className="radar-dot hidden sm:inline-block" title="24/7 Scanner Active"></span>
-              <button
-                className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[11px] font-bold border border-binance-border text-white flex items-center gap-1"
-                onClick={() => fetch('/api/scanner/trigger', { method: 'POST' })}
-                title="Trigger Instant Scanner"
+              {/* Livestream & Mobile Tracking Button */}
+              <a
+                href="/livestream"
+                target="_blank"
+                rel="noreferrer"
+                className="bg-red-500/15 hover:bg-red-500/30 text-red-400 hover:text-white px-2.5 py-1 rounded text-[11px] font-bold border border-red-500/40 flex items-center gap-1.5 transition shadow"
+                title="Mở Trang Theo Dõi Livestream & Mobile Tracking Monitor (Entry, Active Positions, Open Orders, PnL Sort)"
               >
-                <span>⚡</span>
-                <span className="hidden sm:inline">Scan</span>
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                <span className="hidden sm:inline">Livestream Tracker</span>
+                <span className="sm:hidden">🔴 Live</span>
+              </a>
+
+              <button
+                className="bg-binance-subpanel hover:bg-binance-hover px-2.5 py-1 rounded text-[11px] font-bold border border-binance-border text-binance-yellow hover:text-white flex items-center gap-1.5 transition shadow"
+                onClick={() => setIsJournalOpen(true)}
+                title="Mở Nhật Ký Giao Dịch, Lịch PnL & Xuất Báo Cáo JSON (Trading Journal)"
+              >
+                <span>📖</span>
+                <span className="hidden sm:inline">Trading Journal</span>
               </button>
 
               <button
-                className="bg-binance-yellow text-black font-bold px-2 py-1 rounded text-[11px] hover:bg-binance-yellowHover transition flex items-center gap-1"
+                className="bg-binance-yellow text-black font-bold px-2.5 py-1 rounded text-[11px] hover:bg-binance-yellowHover transition flex items-center gap-1.5 shadow"
+                onClick={() => setIsWizardOpen(true)}
+                title="Mở Trình Hướng Dẫn Cài Đặt Mới (Khởi tạo SQLite, Quản trị vốn & Chọn sàn)"
+              >
+                <span>🧙‍♂️</span>
+                <span className="hidden sm:inline">Setup Wizard</span>
+              </button>
+
+              <button
+                className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[11px] font-bold border border-binance-border text-slate-300 hover:text-white transition flex items-center gap-1"
                 onClick={() => setIsSettingsOpen(true)}
                 title="Scanner & Exchange Settings"
               >
@@ -2930,17 +4395,21 @@ function App() {
               </div>
 
               {/* Primary Exchange Tabs for Left Explorer */}
-              <div className="grid grid-cols-4 gap-1 font-mono text-[10.5px]">
+              <div className="grid grid-cols-4 sm:grid-cols-7 gap-1 font-mono text-[10px]">
                 {[
                   { id: 'ALL', label: '🌐 ALL' },
                   { id: 'BINANCE', label: '🔶 BNC' },
                   { id: 'BYBIT', label: '⬛ BYB' },
-                  { id: 'OKX', label: '🔷 OKX' }
+                  { id: 'OKX', label: '🔷 OKX' },
+                  { id: 'BITGET', label: '🔵 BGT' },
+                  { id: 'GATE', label: '🚪 GATE' },
+                  { id: 'BINGX', label: '💠 BGX' }
                 ].map(tab => (
                   <button
                     key={tab.id}
-                    className={`py-1 rounded font-bold transition text-center border ${leftExchangeTab === tab.id ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-card text-binance-textSec border-binance-border hover:text-white'}`}
+                    className={`py-1 rounded font-bold transition text-center border truncate ${leftExchangeTab === tab.id ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-card text-binance-textSec border-binance-border hover:text-white'}`}
                     onClick={() => setLeftExchangeTab(tab.id)}
+                    title={`Lọc cặp giao dịch sàn ${tab.id}`}
                   >
                     {tab.label}
                   </button>
@@ -3944,27 +5413,58 @@ function App() {
               
               {/* 1. Exchanges Management */}
               <div>
-                <h4 className="text-binance-yellow font-bold mb-2">🌐 Multi-Exchange Engine & Seeding</h4>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-binance-yellow font-bold">🌐 Multi-Exchange Engine & CCXT Pro Ingestion (90% Perps)</h4>
+                  <button
+                    className="bg-binance-cyan/20 hover:bg-binance-cyan/35 text-binance-cyan border border-binance-cyan/50 px-2.5 py-1 rounded text-xs font-bold transition shadow flex items-center gap-1.5"
+                    onClick={() => fetch('/api/admin/import-all-exchanges', { method: 'POST' }).then(() => alert('Bắt đầu đồng bộ 90% symbol perpetual của tất cả 6 sàn qua CCXT Pro!'))}
+                  >
+                    <span>⚡</span>
+                    <span>Đồng Bộ Toàn Bộ 6 Sàn (90% Perps)</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
                     <span className="font-bold text-white">🔶 Binance Futures</span>
-                    <span className="text-binance-textSec text-[10px]">500 Symbols • 200 req/min</span>
-                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-top-500', { method: 'POST' }).then(() => alert('Binance 500 seeding started.'))}>
-                      ⚡ Re-Seed 500
+                    <span className="text-binance-textSec text-[10px]">{countBinance} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-binance', { method: 'POST' }).then(() => alert('Binance 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed Binance (90%)
                     </button>
                   </div>
                   <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
                     <span className="font-bold text-white">⬛ Bybit Linear</span>
-                    <span className="text-binance-textSec text-[10px]">300 Symbols • 120 req/min</span>
-                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-bybit', { method: 'POST' }).then(() => alert('Bybit 300 seeding started.'))}>
-                      ⚡ Re-Seed 300
+                    <span className="text-binance-textSec text-[10px]">{countBybit} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-bybit', { method: 'POST' }).then(() => alert('Bybit 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed Bybit (90%)
                     </button>
                   </div>
                   <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
                     <span className="font-bold text-white">🔷 OKX Perpetual</span>
-                    <span className="text-binance-textSec text-[10px]">200 Symbols • 80 req/min</span>
-                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-okx', { method: 'POST' }).then(() => alert('OKX 200 seeding started.'))}>
-                      ⚡ Re-Seed 200
+                    <span className="text-binance-textSec text-[10px]">{countOkx} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-okx', { method: 'POST' }).then(() => alert('OKX 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed OKX (90%)
+                    </button>
+                  </div>
+                  <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
+                    <span className="font-bold text-white">🔵 Bitget Perpetual</span>
+                    <span className="text-binance-textSec text-[10px]">{countBitget} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-bitget', { method: 'POST' }).then(() => alert('Bitget 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed Bitget (90%)
+                    </button>
+                  </div>
+                  <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
+                    <span className="font-bold text-white">🚪 Gate.io Perpetual</span>
+                    <span className="text-binance-textSec text-[10px]">{countGate} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-gate', { method: 'POST' }).then(() => alert('Gate.io 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed Gate (90%)
+                    </button>
+                  </div>
+                  <div className="p-2.5 rounded bg-binance-card border border-binance-border flex flex-col gap-1.5">
+                    <span className="font-bold text-white">💠 BingX Perpetual</span>
+                    <span className="text-binance-textSec text-[10px]">{countBingx} Symbols • 90% Perps</span>
+                    <button className="bg-binance-subpanel hover:bg-binance-hover px-2 py-1 rounded text-[10px] font-bold border border-binance-border mt-1" onClick={() => fetch('/api/admin/import-bingx', { method: 'POST' }).then(() => alert('BingX 90% perpetual seeding started.'))}>
+                      ⚡ Re-Seed BingX (90%)
                     </button>
                   </div>
                 </div>
@@ -3998,11 +5498,25 @@ function App() {
                 </div>
               </div>
 
-              {/* 3. Danger Zone */}
+              {/* 3. Setup Wizard & Danger Zone */}
+              <div className="border border-binance-yellow/30 bg-binance-yellow/5 rounded p-3 flex items-center justify-between">
+                <div>
+                  <b className="text-binance-yellow block">🧙‍♂️ Trình Cài Đặt Mới Hệ Thống (Setup Wizard)</b>
+                  <span className="text-binance-textSec text-[10px]">Cài đặt lại từ đầu: Khởi tạo bảng SQLite, cấu hình quản trị rủi ro & kích hoạt 6 sàn.</span>
+                </div>
+                <button
+                  className="bg-binance-yellow hover:bg-binance-yellowHover text-black px-3 py-1.5 rounded text-xs font-bold shadow transition"
+                  onClick={() => { setIsSettingsOpen(false); setIsWizardOpen(true); }}
+                >
+                  ✨ Mở Setup Wizard
+                </button>
+              </div>
+
+              {/* 4. Danger Zone */}
               <div className="border border-red-500/30 bg-red-500/5 rounded p-3 flex items-center justify-between">
                 <div>
                   <b className="text-binance-red block">⚠️ Danger Zone — Reset Database & Trades</b>
-                  <span className="text-binance-textSec text-[10px]">Wipe order positions or perform full factory reload for 3 exchanges.</span>
+                  <span className="text-binance-textSec text-[10px]">Wipe order positions or perform full factory reload for 6 exchanges.</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button className="bg-binance-red/80 hover:bg-binance-red text-white px-2.5 py-1 rounded text-xs font-bold" onClick={handleResetTrades}>
@@ -4023,6 +5537,31 @@ function App() {
 
           </div>
         </div>
+      )}
+
+      {/* ── TRADING JOURNAL & PERFORMANCE CALENDAR MODAL ── */}
+      {isJournalOpen && (
+        <TradingJournalModal
+          onClose={() => setIsJournalOpen(false)}
+          onOpenForensics={(pos) => setForensicsData(pos)}
+          onSelectSymbol={(sym, ex) => {
+            setActiveSymbol(sym);
+            setActiveExchange(ex || 'BINANCE');
+            setIsJournalOpen(false);
+          }}
+        />
+      )}
+
+      {/* ── INITIAL SETUP WIZARD MODAL ── */}
+      {isWizardOpen && (
+        <SetupWizardModal
+          isOpen={isWizardOpen}
+          onClose={() => setIsWizardOpen(false)}
+          onCompleted={() => {
+            fetchAllData();
+            setIsWizardOpen(false);
+          }}
+        />
       )}
 
       </div>

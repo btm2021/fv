@@ -199,27 +199,20 @@ class ScannerEngine {
     logger.warn('SCANNER', '🛑 Multi-Exchange Scanner Stopped.');
   }
 
+  async restart() {
+    logger.info('SCANNER', '🔄 Restarting Multi-Exchange Scanner with new configuration...');
+    this.stop();
+    await new Promise(r => setTimeout(r, 1000));
+    await this.start();
+    logger.info('SCANNER', '✅ Multi-Exchange Scanner Restarted Successfully!');
+  }
+
   async ensureDatabasesSeeded() {
     try {
-      // 1. Binance Check (500 symbols)
-      const binanceSymbols = await DB.getWhitelistSymbols('BINANCE');
-      if (!binanceSymbols || binanceSymbols.length < 350) {
-        const importTop500 = require('../scripts/import_top_500_symbols');
-        await importTop500(false);
-      }
-
-      // 2. Bybit Check (300 symbols)
-      const bybitSymbols = await DB.getWhitelistSymbols('BYBIT');
-      if (!bybitSymbols || bybitSymbols.length < 200) {
-        const importBybit = require('../scripts/import_bybit_symbols');
-        await importBybit(false);
-      }
-
-      // 3. OKX Check (200 symbols)
-      const okxSymbols = await DB.getWhitelistSymbols('OKX');
-      if (!okxSymbols || okxSymbols.length < 100) {
-        const importOkx = require('../scripts/import_okx_symbols');
-        await importOkx(false);
+      const allSymbols = await DB.getWhitelistSymbols();
+      if (!allSymbols || allSymbols.length < 500) {
+        logger.info('SCANNER', '📡 Seeding 90% perpetual symbols across 6 exchanges via native source code...');
+        await exchangeManager.discoverAndSeedPerpetuals();
       }
     } catch (e) {
       logger.error('SCANNER', `Auto-seed error: ${e.message}`);

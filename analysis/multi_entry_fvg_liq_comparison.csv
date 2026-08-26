@@ -1,5 +1,0 @@
-Model ID,Model Architecture,Total Trades,Fill Rate %,Win Rate %,Profit Factor,Net PnL %,Avg PnL / Trade %
-0,Model 0: Baseline (Single Market Entry + Fixed 2% TP),1637,100.0,49.85,0.73,-580.9,-0.355
-1,Model 1: FVG Limit Only (100% Limit at 50% FVG Midpoint),1062,100.0,48.12,0.82,-208.2,-0.196
-2,Model 2: Multi-Tier DCA (40% Market + 30% FVG Mid + 30% FVG Bot),1637,71.8,52.72,0.76,-345.9,-0.211
-3,Model 3: Full SMC (Multi-Entry + TP1 FVG / TP2 Liq + Breakeven),1637,70.9,61.76,0.63,-446.0,-0.272

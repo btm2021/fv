@@ -27,6 +27,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/indicators', express.static(path.join(__dirname, '..', 'indicators')));
 app.use('/libs', express.static(path.join(__dirname, '..', 'libs')));
 app.get('/smc.js', (req, res) => res.sendFile(path.join(__dirname, '..', 'smc.js')));
+app.get('/livestream', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'livestream.html')));
 
 // ── REST API ROUTES ──
 
@@ -142,34 +143,52 @@ app.delete('/api/strategies/:id', async (req, res) => {
   }
 });
 
-// Admin: Import Top 500 Binance Symbols
-app.post('/api/admin/import-top-500', async (req, res) => {
+// Exchanges Registry & Health
+app.get('/api/exchanges', async (req, res) => {
   try {
-    const importTop500 = require('../scripts/import_top_500_symbols');
-    importTop500(false).catch(err => console.error('Background import top 500 error:', err));
-    res.json({ success: true, message: 'Top 500 Binance Futures (5m & 15m) import started in background.' });
+    const list = [
+      { id: 'BINANCE', name: 'Binance Futures (USDT-M)', icon: '🔶', takerFee: 0.05, makerFee: 0.02, targetPct: '90%' },
+      { id: 'BYBIT', name: 'Bybit Linear Perpetual', icon: '⬛', takerFee: 0.055, makerFee: 0.02, targetPct: '90%' },
+      { id: 'OKX', name: 'OKX Perpetual Swap', icon: '🔷', takerFee: 0.05, makerFee: 0.02, targetPct: '90%' },
+      { id: 'BITGET', name: 'Bitget USDT-M Perpetual', icon: '🔵', takerFee: 0.06, makerFee: 0.02, targetPct: '90%' },
+      { id: 'GATE', name: 'Gate.io Perpetual', icon: '🚪', takerFee: 0.05, makerFee: 0.015, targetPct: '90%' },
+      { id: 'BINGX', name: 'BingX Perpetual', icon: '💠', takerFee: 0.05, makerFee: 0.02, targetPct: '90%' }
+    ];
+
+    const counts = {};
+    for (const item of list) {
+      const symbols = await DB.getWhitelistSymbols(item.id);
+      counts[item.id] = symbols.length;
+    }
+
+    const data = list.map(item => ({
+      ...item,
+      symbolCount: counts[item.id] || 0,
+      active: true
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Admin: Import Top 300 Bybit Symbols
-app.post('/api/admin/import-bybit', async (req, res) => {
+// Admin: Import All 6 Exchanges 90% Perpetual Symbols
+app.post('/api/admin/import-all-exchanges', async (req, res) => {
   try {
-    const importBybit = require('../scripts/import_bybit_symbols');
-    importBybit(false).catch(err => console.error('Background import bybit error:', err));
-    res.json({ success: true, message: 'Top 300 Bybit Linear Perpetual import started in background.' });
+    exchangeManager.discoverAndSeedPerpetuals().catch(err => console.error('Native multi-exchange discovery error:', err));
+    res.json({ success: true, message: 'Ingestion of 90% perpetual symbols across Binance, Bybit, OKX, Bitget, Gate.io, BingX started in background.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Admin: Import Top 200 OKX Symbols
-app.post('/api/admin/import-okx', async (req, res) => {
+// Admin: Import Specific Exchange Perpetual Symbols
+app.post('/api/admin/import-:exchange', async (req, res) => {
+  const ex = (req.params.exchange || '').toUpperCase();
   try {
-    const importOkx = require('../scripts/import_okx_symbols');
-    importOkx(false).catch(err => console.error('Background import okx error:', err));
-    res.json({ success: true, message: 'Top 200 OKX USDT Swap Perpetual import started in background.' });
+    exchangeManager.discoverAndSeedPerpetuals(ex).catch(err => console.error(`Native ${ex} discovery error:`, err));
+    res.json({ success: true, message: `Ingestion of 90% perpetual symbols for ${ex} started in background.` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -192,22 +211,91 @@ app.post('/api/admin/reset-trades', async (req, res) => {
   }
 });
 
-// Admin: Full Database Factory Reset
-app.post('/api/admin/reset-all', async (req, res) => {
+// ── SETUP WIZARD REST API ──
+app.get('/api/wizard/status', async (req, res) => {
   try {
-    await DB.resetEntireDatabase();
-    const importTop500 = require('../scripts/import_top_500_symbols');
-    const importBybit = require('../scripts/import_bybit_symbols');
-    const importOkx = require('../scripts/import_okx_symbols');
-    importTop500(false).catch(e => console.error(e));
-    importBybit(false).catch(e => console.error(e));
-    importOkx(false).catch(e => console.error(e));
-    logger.warn('ADMIN', '⚠️ User executed FULL FACTORY RESET: Cleared DB tables and re-seeding Binance, Bybit & OKX.');
+    const settings = await DB.getAllSettings();
+    const exchanges = ['BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'];
+    const exchangeStats = {};
+    let totalSymbols = 0;
+    for (const ex of exchanges) {
+      const syms = await DB.getWhitelistSymbols(ex);
+      exchangeStats[ex] = { count: syms.length, enabled: true };
+      totalSymbols += syms.length;
+    }
+
+    res.json({
+      success: true,
+      isWizardCompleted: !!settings.wizard_completed_at,
+      totalSymbols,
+      exchangeStats,
+      currentSettings: {
+        account_equity: settings.account_equity || '1000.00',
+        risk_pct_per_trade: settings.risk_pct_per_trade || '1.0',
+        max_leverage: settings.max_leverage || '20',
+        margin_mode: settings.margin_mode || 'ISOLATED',
+        tp1_ratio: settings.tp1_ratio || '1.5',
+        tp1_close_pct: settings.tp1_close_pct || '50',
+        auto_breakeven: settings.auto_breakeven !== '0',
+        tp2_ratio: settings.tp2_ratio || '3.0',
+        max_concurrent_positions: settings.max_concurrent_positions || '5',
+        daily_max_drawdown_pct: settings.daily_max_drawdown_pct || '4.0',
+        enabled_exchanges: settings.enabled_exchanges ? JSON.parse(settings.enabled_exchanges) : exchanges
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/wizard/apply', async (req, res) => {
+  try {
+    logger.info('WIZARD', '🧙‍♂️ Executing Setup Wizard with custom parameters...');
+    const result = await DB.initializeSystemWithWizard(req.body);
+    
+    // ── PROGRAMMATIC AUTOMATIC SERVER HOT-REBOOT & SERVICE RE-INIT ──
+    logger.info('SERVER', '🔄 Auto-rebooting server services to apply new wizard configuration...');
+    
+    // 1. Reconnect active exchange WebSockets
+    exchangeManager.connectAllWebSockets();
+    
+    // 2. Restart background 24/7 Scanner with fresh symbols and rules
+    scanner.restart().catch(err => logger.error('SCANNER', `Scanner auto-restart error: ${err.message}`));
+    
+    // 3. Broadcast server reboot notification to all web clients
+    notification.broadcast('SERVER_REBOOT', {
+      timestamp: Date.now(),
+      message: 'Máy chủ đã tự động khởi động lại và áp dụng toàn bộ cấu hình mới!'
+    });
     notification.broadcast('POSITIONS_UPDATE', {
       positions: [],
       stats: await DB.getPerformanceStats()
     });
-    res.json({ success: true, message: 'Full database reset completed. Binance, Bybit & OKX symbols re-seeding in background.' });
+    notification.broadcast('SIGNALS_UPDATE', { signals: [] });
+
+    res.json({
+      success: true,
+      message: 'Setup Wizard hoàn tất! Máy chủ đã tự động khởi động lại và áp dụng cấu hình mới.',
+      rebooted: true,
+      data: result
+    });
+  } catch (err) {
+    logger.error('WIZARD', `Setup Wizard error: ${err.message}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin: Manual Server Soft Restart
+app.post('/api/admin/restart-server', async (req, res) => {
+  try {
+    logger.info('SERVER', '🔄 Manual server restart triggered...');
+    exchangeManager.connectAllWebSockets();
+    await scanner.restart();
+    notification.broadcast('SERVER_REBOOT', {
+      timestamp: Date.now(),
+      message: 'Máy chủ đã tự động nạp lại cấu hình và khởi động lại dịch vụ thành công.'
+    });
+    res.json({ success: true, message: 'Server services restarted successfully.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -269,6 +357,49 @@ app.get('/api/positions/:id/forensics', async (req, res) => {
       }
     }
     res.json({ success: true, data: pos });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5b3. Trading Journal & Analytics Aggregate API
+app.get('/api/journal', async (req, res) => {
+  const exchange = req.query.exchange || null;
+  const limit = parseInt(req.query.limit, 10) || 500;
+  try {
+    const allTrades = await DB.getAllPositions(limit, exchange);
+    const active = await DB.getActivePositions(exchange);
+    const stats = await DB.getPerformanceStats(exchange);
+    
+    let notes = [];
+    try {
+      notes = await DB.all('SELECT * FROM order_notes');
+    } catch (e) {}
+    const notesMap = {};
+    notes.forEach(n => { notesMap[n.target_id] = n.note_text; });
+
+    // Attach notes and parsed features
+    const enrichedTrades = allTrades.map(t => {
+      let parsedFeatures = {};
+      if (t.features_json && typeof t.features_json === 'string') {
+        try { parsedFeatures = JSON.parse(t.features_json); } catch (e) {}
+      }
+      return {
+        ...t,
+        notes: notesMap[t.id] || notesMap[t.signal_id] || '',
+        features: parsedFeatures
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        trades: enrichedTrades,
+        active_positions: active,
+        stats,
+        total_count: enrichedTrades.length
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

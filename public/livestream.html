@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>STAT2 Pro — Livestream & Mobile Trading Monitor</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            binance: {
+              bg: '#080B11',
+              panel: '#0F1420',
+              subpanel: '#151C2C',
+              card: '#121824',
+              hover: '#1B2438',
+              active: '#1E293B',
+              border: '#1E293B',
+              borderSubtle: '#162032',
+              borderHighlight: '#334155',
+              yellow: '#F0B90B',
+              yellowHover: '#FCD535',
+              green: '#10B981',
+              greenBg: 'rgba(16, 185, 129, 0.15)',
+              red: '#F43F5E',
+              redBg: 'rgba(244, 63, 94, 0.15)',
+              cyan: '#06B6D4',
+              cyanBg: 'rgba(6, 182, 212, 0.15)',
+              purple: '#A855F7',
+              text: '#F8FAFC',
+              textSec: '#94A3B8',
+              textMuted: '#64748B'
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'IBM Plex Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React 18 Production Standalone -->
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <style>
+    /* Custom Scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #080B11; }
+    ::-webkit-scrollbar-thumb { background: #1E293B; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+    /* Radar Pulse Animation */
+    @keyframes pulse-live {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(244, 63, 94, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); }
+    }
+    .pulse-live-dot {
+      animation: pulse-live 1.8s infinite;
+    }
+
+    @keyframes glow-green {
+      0%, 100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+      50% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.5); }
+    }
+    .glow-profit {
+      animation: glow-green 2.5s infinite;
+    }
+  </style>
+</head>
+<body class="bg-binance-bg text-binance-text font-sans antialiased min-h-screen select-none">
+  <div id="root"></div>
+
+  <script src="/livestream_bundle.js"></script>
+</body>
+</html>
