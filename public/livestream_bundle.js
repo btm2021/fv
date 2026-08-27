@@ -1340,7 +1340,7 @@ function LivestreamApp() {
     if (pos.entry_price > 0 && livePrice > 0) {
       const rawDiff = isLong ? (livePrice - pos.entry_price) / pos.entry_price : (pos.entry_price - livePrice) / pos.entry_price;
       liveRoe = rawDiff * 100 * (pos.leverage || 20);
-      liveNetPnl = (pos.initial_margin || 100) * (liveRoe / 100) - (pos.fee_usd || 1.0);
+      liveNetPnl = (pos.initial_margin || 100) * (liveRoe / 100);
     }
     return /*#__PURE__*/React.createElement("tr", {
       key: pos.id,
@@ -1611,7 +1611,7 @@ function LivestreamApp() {
     const isLong = (pos.direction || '').toUpperCase() === 'BUY' || (pos.direction || '').toUpperCase() === 'LONG';
     const pnl = Number(pos.net_pnl_usd) || 0;
     const roe = Number(pos.roe_pct) || 0;
-    const isWin = pnl > 0 || pos.status && pos.status.startsWith('TP');
+    const isWin = pnl > 0;
     return /*#__PURE__*/React.createElement("tr", {
       key: pos.id,
       className: "hover:bg-[#111726] transition cursor-pointer",

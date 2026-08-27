@@ -4686,9 +4686,9 @@ function App() {
                           <tr><td colSpan="9" className="py-8 text-center text-binance-textMuted">No closed trades recorded yet.</td></tr>
                         ) : (
                           closedPositions.map(p => {
-                            const pnlUsd = p.net_pnl_usd || 0.0;
-                            const roePct = p.roe_pct !== undefined ? p.roe_pct : 0.0;
-                            const isWin = pnlUsd >= 0;
+                            const pnlUsd = Number(p.net_pnl_usd) || 0.0;
+                            const roePct = p.roe_pct !== undefined ? Number(p.roe_pct) : 0.0;
+                            const isWin = pnlUsd > 0;
 
                             return (
                               <tr key={p.id} className="hover:bg-binance-hover/40">

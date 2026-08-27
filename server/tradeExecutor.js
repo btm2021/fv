@@ -44,10 +44,11 @@ class TradeExecutor {
       return null;
     }
 
+    const isLong = (signal.direction || '').toUpperCase() === 'BUY' || (signal.direction || '').toUpperCase() === 'LONG';
+
     // Safety Check: Validate against live WebSocket price before entering
     const livePrice = exAdapter.getLivePrice(signal.symbol);
     if (livePrice) {
-      const isLong = signal.direction === 'BUY';
       const slippage = Math.abs(livePrice - signal.entry_price) / signal.entry_price;
 
       // 1. If live market price is already past Stop Loss, REJECT
@@ -81,17 +82,11 @@ class TradeExecutor {
       return null;
     }
 
-    const orderType = (signal.order_type || (strat && strat.order_type ? strat.order_type : 'MARKET')).toUpperCase();
-    const isLimit = orderType === 'LIMIT';
-    const entryFeeRate = isLimit ? (exAdapter.makerFeeRate || 0.0002) : (exAdapter.takerFeeRate || 0.0005);
-
     const notionalSizeUsd = initialMargin * leverage;
     const quantity = notionalSizeUsd / signal.entry_price;
-    const entryFee = notionalSizeUsd * entryFeeRate;
     const maintenanceMargin = notionalSizeUsd * mmrRate;
 
     // ── ESTIMATED LIQUIDATION PRICE FORMULA ──
-    const isLong = signal.direction === 'BUY';
     let liqPrice = 0;
     if (isLong) {
       liqPrice = signal.entry_price * (1 - (1 / leverage) + mmrRate);
@@ -130,7 +125,9 @@ class TradeExecutor {
       tp2_rationale: signal.tp2_rationale || '',
       sl_rationale: signal.sl_rationale || '',
       features_json: signal.features_json || {},
-      fee_usd: entryFee,
+      fee_usd: 0.0,
+      entry_fee: 0.0,
+      exit_fee: 0.0,
       open_time: (signal.timestamp ? (signal.timestamp < 10000000000 ? signal.timestamp * 1000 : signal.timestamp) : Date.now())
     });
 
@@ -160,20 +157,14 @@ class TradeExecutor {
         if (!currentPrice) continue;
 
         const exchangeId = (pos.exchange || 'BINANCE').toUpperCase();
-        const exAdapter = exchangeManager.getExchange(exchangeId);
-        const takerFeeRate = exAdapter.takerFeeRate || 0.0005;
-        const makerFeeRate = exAdapter.makerFeeRate || 0.0002;
-
-        const isLong = pos.direction === 'BUY';
+        const isLong = (pos.direction || '').toUpperCase() === 'BUY' || (pos.direction || '').toUpperCase() === 'LONG';
         let updates = { current_price: currentPrice };
         const durationSec = Math.max(1, Math.round((now - (pos.open_time || now)) / 1000));
 
         // ── 1. LIQUIDATION CHECK ──
         const isLiquidated = isLong ? (currentPrice <= pos.liq_price) : (currentPrice >= pos.liq_price);
         if (isLiquidated) {
-          const exitFee = pos.pos_size_usd * takerFeeRate;
-          const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = -pos.initial_margin;
+          const pnlUsd = -pos.initial_margin;
 
           updates.status = 'LIQ_HIT';
           updates.is_liquidated = 1;
@@ -181,10 +172,10 @@ class TradeExecutor {
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.liq_price;
           updates.exit_reason = 'LIQUIDATED';
-          updates.gross_pnl_usd = -pos.initial_margin;
-          updates.fee_usd = totalFee;
-          updates.exit_fee = exitFee;
-          updates.net_pnl_usd = netPnlUsd;
+          updates.gross_pnl_usd = pnlUsd;
+          updates.fee_usd = 0.0;
+          updates.exit_fee = 0.0;
+          updates.net_pnl_usd = pnlUsd;
           updates.net_pnl_pct = -100.0;
           updates.roe_pct = -100.0;
           updates.margin_ratio = 100.0;
@@ -197,11 +188,8 @@ class TradeExecutor {
         // ── 2. TAKE PROFIT 2 HIT CHECK (Full 3.0R Target) ──
         const isTp2Reached = isLong ? (currentPrice >= pos.tp2_price) : (currentPrice <= pos.tp2_price);
         if (isTp2Reached) {
-          const grossPnlUsd = isLong ? (pos.quantity * (pos.tp2_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp2_price));
-          const exitFee = pos.pos_size_usd * makerFeeRate;
-          const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = Math.max(0.01, grossPnlUsd - totalFee);
-          const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+          const pnlUsd = isLong ? (pos.quantity * (pos.tp2_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp2_price));
+          const roePct = pos.initial_margin > 0 ? (pnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
           updates.status = 'TP2_HIT';
           updates.is_tp1_hit = 1;
@@ -209,26 +197,23 @@ class TradeExecutor {
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.tp2_price;
           updates.exit_reason = 'TP2_HIT';
-          updates.gross_pnl_usd = grossPnlUsd;
-          updates.fee_usd = totalFee;
-          updates.exit_fee = exitFee;
-          updates.net_pnl_usd = netPnlUsd;
-          updates.net_pnl_pct = (netPnlUsd / pos.pos_size_usd) * 100.0;
+          updates.gross_pnl_usd = pnlUsd;
+          updates.fee_usd = 0.0;
+          updates.exit_fee = 0.0;
+          updates.net_pnl_usd = pnlUsd;
+          updates.net_pnl_pct = (pnlUsd / pos.pos_size_usd) * 100.0;
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] [BINANCE] ${pos.symbol} closed at TP2 (${pos.tp2_price}). Realized: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
+          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] [BINANCE] ${pos.symbol} closed at TP2 (${pos.tp2_price}). Realized: +$${pnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
           continue;
         }
 
         // ── 3. TAKE PROFIT 1 HIT CHECK (1.5R Target) ──
         const isTp1Reached = isLong ? (currentPrice >= pos.tp1_price) : (currentPrice <= pos.tp1_price);
         if (isTp1Reached) {
-          const grossPnlUsd = isLong ? (pos.quantity * (pos.tp1_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp1_price));
-          const exitFee = pos.pos_size_usd * takerFeeRate;
-          const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = Math.max(0.01, grossPnlUsd - totalFee);
-          const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+          const pnlUsd = isLong ? (pos.quantity * (pos.tp1_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp1_price));
+          const roePct = pos.initial_margin > 0 ? (pnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
           updates.status = 'TP1_HIT';
           updates.is_tp1_hit = 1;
@@ -236,60 +221,53 @@ class TradeExecutor {
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.tp1_price;
           updates.exit_reason = 'TP1_HIT';
-          updates.gross_pnl_usd = grossPnlUsd;
-          updates.fee_usd = totalFee;
-          updates.exit_fee = exitFee;
-          updates.net_pnl_usd = netPnlUsd;
-          updates.net_pnl_pct = (netPnlUsd / pos.pos_size_usd) * 100.0;
+          updates.gross_pnl_usd = pnlUsd;
+          updates.fee_usd = 0.0;
+          updates.exit_fee = 0.0;
+          updates.net_pnl_usd = pnlUsd;
+          updates.net_pnl_pct = (pnlUsd / pos.pos_size_usd) * 100.0;
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('WIN_CLOSE', `🏆 [TP1 WIN] [BINANCE] ${pos.symbol} closed at TP1 (${pos.tp1_price}). Realized: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
+          logger.trade('WIN_CLOSE', `🏆 [TP1 WIN] [BINANCE] ${pos.symbol} closed at TP1 (${pos.tp1_price}). Realized: +$${pnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
           continue;
         }
 
         // ── 4. STOP-LOSS HIT CHECK ──
         const isSlHit = isLong ? (currentPrice <= pos.sl_price) : (currentPrice >= pos.sl_price);
         if (isSlHit) {
-          const grossPnlUsd = isLong ? (pos.quantity * (pos.sl_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.sl_price));
-          const exitFee = pos.pos_size_usd * takerFeeRate;
-          const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const rawNetPnlUsd = grossPnlUsd - totalFee;
+          const rawLoss = isLong ? (pos.quantity * (pos.sl_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.sl_price));
           // Loss is capped at initial margin
-          const netPnlUsd = Math.max(-pos.initial_margin, rawNetPnlUsd);
-          const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+          const pnlUsd = Math.max(-pos.initial_margin, rawLoss);
+          const roePct = pos.initial_margin > 0 ? (pnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
           updates.status = 'SL_HIT';
           updates.close_time = now;
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.sl_price;
           updates.exit_reason = 'SL_HIT';
-          updates.gross_pnl_usd = grossPnlUsd;
-          updates.fee_usd = totalFee;
-          updates.exit_fee = exitFee;
-          updates.net_pnl_usd = netPnlUsd;
-          updates.net_pnl_pct = (netPnlUsd / pos.pos_size_usd) * 100.0;
+          updates.gross_pnl_usd = pnlUsd;
+          updates.fee_usd = 0.0;
+          updates.exit_fee = 0.0;
+          updates.net_pnl_usd = pnlUsd;
+          updates.net_pnl_pct = (pnlUsd / pos.pos_size_usd) * 100.0;
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('SL_HIT', `🛑 [SL HIT] [BINANCE] ${pos.symbol} closed at SL (${pos.sl_price}). Loss: -$${Math.abs(netPnlUsd).toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
+          logger.trade('SL_HIT', `🛑 [SL HIT] [BINANCE] ${pos.symbol} closed at SL (${pos.sl_price}). Loss: -$${Math.abs(pnlUsd).toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
           continue;
         }
 
-        // ── 5. REAL-TIME UNREALIZED PNL & ROE & MARGIN RATIO ──
-        const unrealizedGrossPnl = isLong ? (pos.quantity * (currentPrice - pos.entry_price)) : (pos.quantity * (pos.entry_price - currentPrice));
-        const estimatedExitFee = pos.pos_size_usd * takerFeeRate;
-        const totalEstimatedFee = (pos.entry_fee || pos.fee_usd || 0) + estimatedExitFee;
-        const unrealizedNetPnl = unrealizedGrossPnl - totalEstimatedFee;
-
-        const roePct = pos.initial_margin > 0 ? (unrealizedNetPnl / pos.initial_margin) * 100.0 : 0.0;
-        const positionMarginBalance = pos.initial_margin + unrealizedGrossPnl;
+        // ── 5. REAL-TIME UNREALIZED PNL & ROE & MARGIN RATIO (ZERO FEE) ──
+        const unrealizedPnl = isLong ? (pos.quantity * (currentPrice - pos.entry_price)) : (pos.quantity * (pos.entry_price - currentPrice));
+        const roePct = pos.initial_margin > 0 ? (unrealizedPnl / pos.initial_margin) * 100.0 : 0.0;
+        const positionMarginBalance = pos.initial_margin + unrealizedPnl;
         const marginRatio = positionMarginBalance > 0 ? (pos.maintenance_margin / positionMarginBalance) * 100.0 : 100.0;
 
-        updates.gross_pnl_usd = unrealizedGrossPnl;
-        updates.fee_usd = totalEstimatedFee;
-        updates.net_pnl_usd = unrealizedNetPnl;
-        updates.net_pnl_pct = (unrealizedNetPnl / pos.pos_size_usd) * 100.0;
+        updates.gross_pnl_usd = unrealizedPnl;
+        updates.fee_usd = 0.0;
+        updates.net_pnl_usd = unrealizedPnl;
+        updates.net_pnl_pct = (unrealizedPnl / pos.pos_size_usd) * 100.0;
         updates.roe_pct = roePct;
         updates.margin_ratio = marginRatio;
 
@@ -310,16 +288,10 @@ class TradeExecutor {
     if (!pos) throw new Error('Active position not found');
 
     const exchangeId = (pos.exchange || 'BINANCE').toUpperCase();
-    const exAdapter = exchangeManager.getExchange(exchangeId);
-    const takerFeeRate = exAdapter.takerFeeRate || 0.0005;
-
-    const isLong = pos.direction === 'BUY';
+    const isLong = (pos.direction || '').toUpperCase() === 'BUY' || (pos.direction || '').toUpperCase() === 'LONG';
     const closePrice = marketPrice || pos.current_price || pos.entry_price;
-    const grossPnlUsd = isLong ? (pos.quantity * (closePrice - pos.entry_price)) : (pos.quantity * (pos.entry_price - closePrice));
-    const exitFee = pos.pos_size_usd * takerFeeRate;
-    const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-    const netPnlUsd = grossPnlUsd - totalFee;
-    const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+    const pnlUsd = isLong ? (pos.quantity * (closePrice - pos.entry_price)) : (pos.quantity * (pos.entry_price - closePrice));
+    const roePct = pos.initial_margin > 0 ? (pnlUsd / pos.initial_margin) * 100.0 : 0.0;
     const now = Date.now();
     const durationSec = Math.max(1, Math.round((now - (pos.open_time || now)) / 1000));
 
@@ -330,16 +302,16 @@ class TradeExecutor {
       exit_price: closePrice,
       exit_reason: 'MANUAL_CLOSE',
       current_price: closePrice,
-      gross_pnl_usd: grossPnlUsd,
-      fee_usd: totalFee,
-      exit_fee: exitFee,
-      net_pnl_usd: netPnlUsd,
-      net_pnl_pct: (netPnlUsd / pos.pos_size_usd) * 100.0,
+      gross_pnl_usd: pnlUsd,
+      fee_usd: 0.0,
+      exit_fee: 0.0,
+      net_pnl_usd: pnlUsd,
+      net_pnl_pct: (pnlUsd / pos.pos_size_usd) * 100.0,
       roe_pct: roePct
     };
 
     await DB.updatePosition(posId, updates);
-    logger.trade('MANUAL_CLOSE', `🖐️ [MANUAL CLOSE] [${exchangeId}] ${pos.symbol} closed at ${closePrice}. Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
+    logger.trade('MANUAL_CLOSE', `🖐️ [MANUAL CLOSE] [${exchangeId}] ${pos.symbol} closed at ${closePrice}. Realized PnL: ${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
     
     // Broadcast immediate update to all UIs (Terminal & Livestream)
     try {

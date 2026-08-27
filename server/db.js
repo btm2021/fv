@@ -783,16 +783,16 @@ class DBManager {
     const activePositions = await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE' AND exchange = ?", [ex]);
 
     const total = closedTrades.length;
-    // Win if status is TP hit (TP1_HIT, TP2_HIT) OR net_pnl_usd > 0
-    const wins = closedTrades.filter(t => (t.status && t.status.startsWith('TP')) || (t.net_pnl_usd > 0));
-    const losses = closedTrades.filter(t => (!t.status || !t.status.startsWith('TP')) && (t.net_pnl_usd <= 0) && !t.is_liquidated && t.status !== 'LIQ_HIT');
+    // Win is STRICTLY AND ONLY when net realized profit (after all fees) is POSITIVE (> 0)
+    const wins = closedTrades.filter(t => (Number(t.net_pnl_usd) || 0) > 0);
+    const losses = closedTrades.filter(t => (Number(t.net_pnl_usd) || 0) <= 0 && !t.is_liquidated && t.status !== 'LIQ_HIT');
     const liquidations = closedTrades.filter(t => t.is_liquidated === 1 || t.status === 'LIQ_HIT');
 
     const winRate = total > 0 ? (wins.length / total * 100) : 0;
-    const totalGain = wins.reduce((sum, t) => sum + Math.max(0, t.net_pnl_usd || 0), 0);
-    const totalLoss = Math.abs(losses.reduce((sum, t) => sum + Math.min(0, t.net_pnl_usd || 0), 0) + liquidations.reduce((sum, t) => sum + Math.min(0, t.net_pnl_usd || 0), 0));
+    const totalGain = wins.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
+    const totalLoss = Math.abs(losses.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0) + liquidations.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0));
     const profitFactor = totalLoss > 0 ? (totalGain / totalLoss) : (totalGain > 0 ? 999 : 0);
-    const netRealizedProfit = closedTrades.reduce((sum, t) => sum + (t.net_pnl_usd || 0), 0);
+    const netRealizedProfit = closedTrades.reduce((sum, t) => sum + (Number(t.net_pnl_usd) || 0), 0);
 
     const baseEq = Number(await this.getSetting('account_equity', '10000.00'));
     const walletBalance = baseEq + netRealizedProfit;
@@ -827,6 +827,16 @@ class DBManager {
   }
 
   // ── RESET OPERATIONS ──
+  async resetAll() {
+    await this.run('DELETE FROM trade_positions');
+    await this.run('DELETE FROM signals_alerts');
+    try { await this.run('DELETE FROM chart_drawings'); } catch (e) {}
+    try { await this.run('DELETE FROM order_notes'); } catch (e) {}
+    await this.setSetting('account_equity', '10000.00');
+    try { await this.run('VACUUM'); } catch (e) {}
+    return true;
+  }
+
   async resetTradesAndSignals(exchange = null) {
     if (exchange) {
       await this.run('DELETE FROM trade_positions WHERE exchange = ?', [exchange.toUpperCase()]);
@@ -835,7 +845,7 @@ class DBManager {
       await this.run('DELETE FROM trade_positions');
       await this.run('DELETE FROM signals_alerts');
     }
-    await this.setSetting('account_equity', '1000.00');
+    await this.setSetting('account_equity', '10000.00');
     try { await this.run('VACUUM'); } catch (e) {}
   }
 
