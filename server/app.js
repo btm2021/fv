@@ -215,7 +215,7 @@ app.post('/api/admin/reset-trades', async (req, res) => {
 app.get('/api/wizard/status', async (req, res) => {
   try {
     const settings = await DB.getAllSettings();
-    const exchanges = ['BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'];
+    const exchanges = ['BINANCE'];
     const exchangeStats = {};
     let totalSymbols = 0;
     for (const ex of exchanges) {
@@ -230,7 +230,7 @@ app.get('/api/wizard/status', async (req, res) => {
       totalSymbols,
       exchangeStats,
       currentSettings: {
-        account_equity: settings.account_equity || '1000.00',
+        account_equity: settings.account_equity || '10000.00',
         risk_pct_per_trade: settings.risk_pct_per_trade || '1.0',
         max_leverage: settings.max_leverage || '20',
         margin_mode: settings.margin_mode || 'ISOLATED',
@@ -240,7 +240,7 @@ app.get('/api/wizard/status', async (req, res) => {
         tp2_ratio: settings.tp2_ratio || '3.0',
         max_concurrent_positions: settings.max_concurrent_positions || '5',
         daily_max_drawdown_pct: settings.daily_max_drawdown_pct || '4.0',
-        enabled_exchanges: settings.enabled_exchanges ? JSON.parse(settings.enabled_exchanges) : exchanges
+        enabled_exchanges: ['BINANCE']
       }
     });
   } catch (err) {

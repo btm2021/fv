@@ -395,10 +395,10 @@ class DBManager {
       `, [item.key, item.value, Date.now()]);
     }
 
-    // Seed default top liquid symbols for all 6 exchanges if whitelist is empty
+    // Seed default top liquid symbols for Binance Futures if whitelist is empty
     const existing = await this.get('SELECT COUNT(*) as count FROM whitelist_symbols');
     if (!existing || existing.count < 50) {
-      const exchanges = ['BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'];
+      const exchanges = ['BINANCE'];
       for (const ex of exchanges) {
         await this.seedFallbackSymbolsForExchange(ex);
       }
@@ -777,29 +777,24 @@ class DBManager {
     return await this.all('SELECT * FROM trade_positions ORDER BY open_time DESC LIMIT ?', [limit]);
   }
 
-  async getPerformanceStats(exchange = null) {
-    const closedSql = exchange
-      ? "SELECT * FROM trade_positions WHERE status != 'ACTIVE' AND exchange = ?"
-      : "SELECT * FROM trade_positions WHERE status != 'ACTIVE'";
-    const activeSql = exchange
-      ? "SELECT * FROM trade_positions WHERE status = 'ACTIVE' AND exchange = ?"
-      : "SELECT * FROM trade_positions WHERE status = 'ACTIVE'";
-
-    const closedTrades = await this.all(closedSql, exchange ? [exchange.toUpperCase()] : []);
-    const activePositions = await this.all(activeSql, exchange ? [exchange.toUpperCase()] : []);
+  async getPerformanceStats(exchange = 'BINANCE') {
+    const ex = (exchange && exchange !== 'ALL') ? exchange.toUpperCase() : 'BINANCE';
+    const closedTrades = await this.all("SELECT * FROM trade_positions WHERE status != 'ACTIVE' AND exchange = ?", [ex]);
+    const activePositions = await this.all("SELECT * FROM trade_positions WHERE status = 'ACTIVE' AND exchange = ?", [ex]);
 
     const total = closedTrades.length;
-    const wins = closedTrades.filter(t => t.net_pnl_usd > 0);
-    const losses = closedTrades.filter(t => t.net_pnl_usd < 0 && !t.is_liquidated);
+    // Win if status is TP hit (TP1_HIT, TP2_HIT) OR net_pnl_usd > 0
+    const wins = closedTrades.filter(t => (t.status && t.status.startsWith('TP')) || (t.net_pnl_usd > 0));
+    const losses = closedTrades.filter(t => (!t.status || !t.status.startsWith('TP')) && (t.net_pnl_usd <= 0) && !t.is_liquidated && t.status !== 'LIQ_HIT');
     const liquidations = closedTrades.filter(t => t.is_liquidated === 1 || t.status === 'LIQ_HIT');
 
     const winRate = total > 0 ? (wins.length / total * 100) : 0;
-    const totalGain = wins.reduce((sum, t) => sum + t.net_pnl_usd, 0);
-    const totalLoss = Math.abs(losses.reduce((sum, t) => sum + t.net_pnl_usd, 0));
+    const totalGain = wins.reduce((sum, t) => sum + Math.max(0, t.net_pnl_usd || 0), 0);
+    const totalLoss = Math.abs(losses.reduce((sum, t) => sum + Math.min(0, t.net_pnl_usd || 0), 0) + liquidations.reduce((sum, t) => sum + Math.min(0, t.net_pnl_usd || 0), 0));
     const profitFactor = totalLoss > 0 ? (totalGain / totalLoss) : (totalGain > 0 ? 999 : 0);
-    const netRealizedProfit = closedTrades.reduce((sum, t) => sum + t.net_pnl_usd, 0);
+    const netRealizedProfit = closedTrades.reduce((sum, t) => sum + (t.net_pnl_usd || 0), 0);
 
-    const baseEq = Number(await this.getSetting('account_equity', '1000.00'));
+    const baseEq = Number(await this.getSetting('account_equity', '10000.00'));
     const walletBalance = baseEq + netRealizedProfit;
 
     // Unrealized PnL from Active Positions
@@ -812,7 +807,7 @@ class DBManager {
     const accountMarginRatio = marginBalance > 0 ? (totalMaintenanceMarginUsed / marginBalance) * 100.0 : 0.0;
 
     return {
-      exchange: exchange || 'ALL',
+      exchange: ex,
       total_trades: total,
       wins: wins.length,
       losses: losses.length,

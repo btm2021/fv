@@ -1,28 +1,16 @@
 /**
- * Unified Multi-Exchange Registry & Factory
- * Manages standardized adapters for Binance, Bybit, OKX, and future exchanges
+ * Unified Exchange Registry & Factory
+ * Dedicated 100% to Binance Futures (USDT-M)
  */
 const binanceExchange = require('./binanceExchange');
-const bybitExchange = require('./bybitExchange');
-const okxExchange = require('./okxExchange');
-const bitgetExchange = require('./bitgetExchange');
-const gateExchange = require('./gateExchange');
-const bingxExchange = require('./bingxExchange');
 
 const EXCHANGES = {
-  BINANCE: binanceExchange,
-  BYBIT: bybitExchange,
-  OKX: okxExchange,
-  BITGET: bitgetExchange,
-  GATE: gateExchange,
-  BINGX: bingxExchange
+  BINANCE: binanceExchange
 };
 
 class ExchangeManager {
   getExchange(exchangeId) {
-    if (!exchangeId) return EXCHANGES.BINANCE;
-    const key = exchangeId.toUpperCase();
-    return EXCHANGES[key] || EXCHANGES.BINANCE;
+    return EXCHANGES.BINANCE;
   }
 
   getAllExchanges() {
@@ -34,42 +22,31 @@ class ExchangeManager {
   }
 
   hasExchange(exchangeId) {
-    return !!EXCHANGES[exchangeId.toUpperCase()];
+    return true;
   }
 
   connectAllWebSockets() {
-    for (const ex of Object.values(EXCHANGES)) {
-      if (typeof ex.connectWs === 'function') {
-        ex.connectWs();
-      }
+    if (typeof EXCHANGES.BINANCE.connectWs === 'function') {
+      EXCHANGES.BINANCE.connectWs();
     }
   }
 
   getLivePrice(symbol, exchangeId = 'BINANCE') {
-    const ex = this.getExchange(exchangeId);
-    return ex ? ex.getLivePrice(symbol) : null;
+    return EXCHANGES.BINANCE.getLivePrice(symbol);
   }
 
   /**
-   * Native Source-Code Discovery & Ingestion of 90% Perpetual Symbols (CCXT Pro)
-   * Supports Binance, Bybit, OKX, Bitget, Gate.io, BingX directly without auxiliary scripts
+   * Native Source-Code Discovery & Ingestion of 90% Binance Perpetual Symbols (CCXT Pro)
    */
-  async discoverAndSeedPerpetuals(targetExchangeId = null) {
+  async discoverAndSeedPerpetuals(targetExchangeId = 'BINANCE') {
     const DB = require('../db');
     const ccxt = require('ccxt');
 
     const configs = [
-      { id: 'BINANCE', name: 'Binance Futures (USDT-M)', exClass: 'binance', options: { defaultType: 'future' } },
-      { id: 'BYBIT', name: 'Bybit Linear Perpetual', exClass: 'bybit', options: { defaultType: 'swap' } },
-      { id: 'OKX', name: 'OKX Perpetual Swap', exClass: 'okx', options: { defaultType: 'swap' } },
-      { id: 'BITGET', name: 'Bitget USDT-M Perpetual', exClass: 'bitget', options: { defaultType: 'swap' } },
-      { id: 'GATE', name: 'Gate.io Perpetual', exClass: 'gate', options: { defaultType: 'swap' } },
-      { id: 'BINGX', name: 'BingX Perpetual', exClass: 'bingx', options: { defaultType: 'swap' } }
+      { id: 'BINANCE', name: 'Binance Futures (USDT-M)', exClass: 'binance', options: { defaultType: 'future' } }
     ];
 
-    const targets = targetExchangeId
-      ? configs.filter(c => c.id === targetExchangeId.toUpperCase())
-      : configs;
+    const targets = configs;
 
     const summary = [];
     const now = Date.now();

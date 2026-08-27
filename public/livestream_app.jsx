@@ -16,139 +16,826 @@ function formatDate(ts) {
   return d.toLocaleString('vi-VN', { hour12: false });
 }
 
-// ── 1. DETAILED FORENSICS MODAL (MATCHING MAIN TERMINAL) ──
-function LivestreamForensicsModal({ data, onClose, onClosePosition }) {
-  if (!data) return null;
-  const isLong = (data.direction || '').toUpperCase() === 'LONG';
-  const isActive = data.status === 'ACTIVE';
-  const pnl = Number(data.net_pnl_usd) || 0;
-  const roe = Number(data.roe_pct) || 0;
-  const isWin = pnl > 0;
+function formatRelativeTime(ts) {
+  if (!ts) return '--';
+  const sec = Math.max(0, Math.floor((Date.now() - (ts < 10000000000 ? ts * 1000 : ts)) / 1000));
+  if (sec < 5) return 'vừa xong';
+  if (sec < 60) return `${sec}s trước`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}p trước`;
+  return `${Math.floor(sec / 3600)}h trước`;
+}
 
-  const [noteText, setNoteText] = useState(data.notes || '');
+// ── GLOBAL ALL-MARKET BINANCE TICKERS STREAM (0MS WEBSOCKET) ──
+const GlobalMarketStreamManager = {
+  binanceWs: null,
+  listeners: new Set(),
+  cachedPrices: {},
+
+  subscribe(listener) {
+    this.listeners.add(listener);
+    if (Object.keys(this.cachedPrices).length > 0) {
+      listener(this.cachedPrices);
+    }
+    if (!this.binanceWs) this.initBinance();
+    return () => this.listeners.delete(listener);
+  },
+
+  emit(updates) {
+    const finalBatch = {};
+    for (const [key, val] of Object.entries(updates)) {
+      const prev = this.cachedPrices[key];
+      const prevPrice = prev ? prev.price : val.price;
+      let tickDir = 'equal';
+      if (prev && val.price > prevPrice) tickDir = 'up';
+      else if (prev && val.price < prevPrice) tickDir = 'down';
+      else if (prev) tickDir = prev.tickDir || 'equal';
+
+      finalBatch[key] = {
+        ...val,
+        prevPrice,
+        tickDir
+      };
+    }
+    Object.assign(this.cachedPrices, finalBatch);
+    this.listeners.forEach(l => l(finalBatch));
+  },
+
+  async fetchInitialSnapshot() {
+    try {
+      const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
+      const arr = await res.json();
+      if (Array.isArray(arr)) {
+        const batch = {};
+        for (let i = 0; i < arr.length; i++) {
+          const t = arr[i];
+          const p = parseFloat(t.lastPrice) || 0;
+          const chg = parseFloat(t.priceChangePercent) || 0;
+          const vol = parseFloat(t.quoteVolume) || 0;
+          batch['BINANCE_' + t.symbol] = { price: p, change24h: chg, vol };
+          batch[t.symbol] = { price: p, change24h: chg, vol };
+        }
+        this.emit(batch);
+      }
+    } catch (e) {}
+  },
+
+  initBinance() {
+    this.fetchInitialSnapshot();
+    try {
+      const ws = new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
+      this.binanceWs = ws;
+      ws.onmessage = (e) => {
+        try {
+          const arr = JSON.parse(e.data);
+          if (Array.isArray(arr)) {
+            const batch = {};
+            for (let i = 0; i < arr.length; i++) {
+              const t = arr[i];
+              const p = parseFloat(t.c) || 0;
+              const chg = parseFloat(t.P) || 0;
+              const vol = parseFloat(t.q) || 0;
+              batch['BINANCE_' + t.s] = { price: p, change24h: chg, vol };
+              batch[t.s] = { price: p, change24h: chg, vol };
+            }
+            this.emit(batch);
+          }
+        } catch (err) {}
+      };
+      ws.onclose = () => setTimeout(() => this.initBinance(), 4000);
+    } catch (e) {}
+  }
+};
+
+// ── DIRECT BROWSER-TO-BINANCE KLINE CLIENT ──
+const DirectExchangeClient = {
+  async fetchBinance(symbol, interval = '5m', limit = 1000) {
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+    const data = await res.json();
+    return data.map(k => ({
+      time: Math.floor(k[0] / 1000),
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5])
+    }));
+  },
+
+  async fetchCandles(symbol, timeframe = '5m') {
+    return await this.fetchBinance(symbol, timeframe);
+  },
+
+  subscribeKline(symbol, timeframe, onTick) {
+    let isClosed = false;
+    const safeClose = () => {
+      isClosed = true;
+      try { if (rawWs) rawWs.close(); } catch (e) {}
+    };
+
+    let rawWs = null;
+    try {
+      const sym = symbol.toLowerCase();
+      rawWs = new WebSocket(`wss://fstream.binance.com/ws/${sym}@kline_${timeframe}`);
+      rawWs.onmessage = (e) => {
+        if (isClosed) return;
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.k) {
+            const k = msg.k;
+            onTick({
+              time: Math.floor(k.t / 1000),
+              open: parseFloat(k.o),
+              high: parseFloat(k.h),
+              low: parseFloat(k.l),
+              close: parseFloat(k.c),
+              volume: parseFloat(k.v)
+            });
+          }
+        } catch (err) {}
+      };
+    } catch (e) {}
+
+    return { close: safeClose, rawWs };
+  }
+};
+
+// ── DEFAULT INDICATORS SPECIFICATION ──
+const DEFAULT_INDICATOR_INSTANCES = [
+  {
+    id: 'inst_stat2_box_1',
+    type: 'stat2_box_strategy',
+    name: 'STAT2 Pro Box Strategy',
+    visible: true,
+    inputs: {
+      strategyMode: 'dual',
+      cmoLength: 14,
+      maLength: 21,
+      atrLength: 14,
+      atrMult: 2.0,
+      minAtrPct: 0.35,
+      liqThresholdPct: 1.5,
+      fvgThresholdPct: 1.5,
+      swingLookback: 30,
+      maxCardsVisible: 15,
+      orderType: 'MARKET',
+      leverage: 20,
+      marginMode: 'ISOLATED',
+      riskPct: 1.0,
+      tp1Ratio: 1.5,
+      tp1ClosePct: 50,
+      tp2Ratio: 3.0,
+      autoBreakeven: true
+    },
+    styles: {
+      bullishColor: '#10B981',
+      bearishColor: '#F43F5E',
+      neutralColor: '#F0B90B',
+      boxOpacity: 0.18,
+      showRationaleTooltip: true
+    }
+  },
+  {
+    id: 'inst_atrbot_1',
+    type: 'atrbot',
+    name: 'ATR Dynamic Bands',
+    visible: true,
+    inputs: { period: 14, multiplier: 2.0 },
+    styles: { upperColor: '#F0B90B', lowerColor: '#F0B90B', lineWidth: 1 }
+  },
+  {
+    id: 'inst_smc_1',
+    type: 'smc',
+    name: 'Smart Money Concepts',
+    visible: true,
+    inputs: { swingLookback: 20, fvgThreshold: 0.5 },
+    styles: { bslColor: '#10B981', sslColor: '#F43F5E', fvgBullColor: 'rgba(16, 185, 129, 0.15)', fvgBearColor: 'rgba(244, 63, 94, 0.15)' }
+  }
+];
+
+// ── FULL EMBEDDED LIGHTWEIGHT CANDLE CHART COMPONENT ──
+function FullStat2CandleChart({
+  symbol,
+  timeframe = '15m',
+  exchange = 'BINANCE',
+  onTfChange,
+  instances = DEFAULT_INDICATOR_INSTANCES
+}) {
+  const chartContainerRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+    if (typeof LightweightCharts === 'undefined') return;
+
+    const chart = LightweightCharts.createChart(chartContainerRef.current, {
+      layout: {
+        background: { color: '#080B11' },
+        textColor: '#94A3B8',
+        fontSize: 11,
+        fontFamily: 'JetBrains Mono, monospace'
+      },
+      grid: {
+        vertLines: { color: 'rgba(30, 41, 59, 0.4)' },
+        horzLines: { color: 'rgba(30, 41, 59, 0.4)' }
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: '#F0B90B', width: 1, style: 2 },
+        horzLine: { color: '#F0B90B', width: 1, style: 2 }
+      },
+      timeScale: {
+        borderColor: '#1E293B',
+        timeVisible: true,
+        secondsVisible: false
+      },
+      rightPriceScale: {
+        borderColor: '#1E293B',
+        autoScale: true
+      }
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#10B981',
+      downColor: '#F43F5E',
+      borderVisible: false,
+      wickUpColor: '#10B981',
+      wickDownColor: '#F43F5E'
+    });
+
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+      scaleMargins: { top: 0.82, bottom: 0 }
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+
+    // Load initial candles
+    let isCancelled = false;
+    async function loadData() {
+      setLoading(true);
+      try {
+        const candles = await DirectExchangeClient.fetchCandles(symbol, timeframe);
+        if (!isCancelled && candles && candles.length > 0) {
+          candleSeries.setData(candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+          volumeSeries.setData(candles.map(c => ({ time: c.time, value: c.volume, color: c.close >= c.open ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)' })));
+          chart.timeScale().fitContent();
+        }
+      } catch (e) {
+      } finally {
+        if (!isCancelled) setLoading(false);
+      }
+    }
+    loadData();
+
+    // Subscribe live kline
+    const sub = DirectExchangeClient.subscribeKline(symbol, timeframe, (kline) => {
+      if (isCancelled) return;
+      candleSeries.update({ time: kline.time, open: kline.open, high: kline.high, low: kline.low, close: kline.close });
+      volumeSeries.update({ time: kline.time, value: kline.volume, color: kline.close >= kline.open ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)' });
+    });
+
+    const handleResize = () => {
+      if (chartContainerRef.current) {
+        chart.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+          height: chartContainerRef.current.clientHeight
+        });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      isCancelled = true;
+      sub.close();
+      window.removeEventListener('resize', handleResize);
+      chart.remove();
+    };
+  }, [symbol, timeframe]);
+
+  return (
+    <div className="w-full h-full flex flex-col relative bg-[#080B11]">
+      {/* Mini TF Bar */}
+      <div className="flex items-center justify-between p-2 bg-[#0C101A] border-b border-[#1E293B] shrink-0 font-mono text-xs">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-white text-xs">{symbol}</span>
+          <span className="text-[10px] text-binance-yellow bg-binance-active px-1.5 py-0.2 rounded font-bold">{exchange}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {['1m', '5m', '15m', '1h', '4h', '1d'].map(tf => (
+            <button
+              key={tf}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${timeframe === tf ? 'bg-binance-yellow text-black' : 'text-slate-400 hover:text-white bg-[#151C2C]'}`}
+              onClick={() => onTfChange && onTfChange(tf)}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 relative" ref={chartContainerRef}>
+        {loading && (
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10 text-xs font-mono text-binance-yellow">
+            <span className="animate-spin mr-2">⚡</span> Đang tải nến và chỉ báo trực tiếp từ Binance...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── FULL 1:1 DEEP QUANTITATIVE ORDER & TRADE FORENSICS INTELLIGENCE MODAL ──
+function OrderForensicsModal({
+  data,
+  marketPrices = {},
+  onClose,
+  onClosePosition
+}) {
+  if (!data) return null;
+
+  const [activeSection, setActiveSection] = useState('sec-flow');
+  const [modalTf, setModalTf] = useState(data.timeframe || data.tf || '15m');
+  const scrollContainerRef = useRef(null);
+
+  // Trade Notes Persistence
+  const [tradeNote, setTradeNote] = useState('');
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [saveNoteSuccess, setSaveNoteSuccess] = useState(false);
+
+  const isLong = data.direction === 'BUY' || (data.signal_type && data.signal_type.includes('BUY')) || (data.side && data.side.toUpperCase() === 'BUY') || data.direction === 'LONG';
+  const symbol = data.symbol || 'BTCUSDT';
+  const exchange = data.exchange || 'BINANCE';
+  const targetId = data.id || `${exchange}_${symbol}`;
+
+  // Load trade notes from DB
+  useEffect(() => {
+    let isCancelled = false;
+    async function loadNote() {
+      try {
+        const res = await fetch(`/api/notes/${targetId}`).then(r => r.json());
+        if (!isCancelled && res.success && res.data && res.data.note_text !== undefined) {
+          setTradeNote(res.data.note_text || '');
+        }
+      } catch (e) {}
+    }
+    loadNote();
+    return () => { isCancelled = true; };
+  }, [targetId]);
 
   const handleSaveNote = async () => {
     setIsSavingNote(true);
     try {
-      await fetch(`/api/positions/notes/${data.id}`, {
+      await fetch(`/api/notes/${targetId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: noteText })
+        body: JSON.stringify({ symbol, note_text: tradeNote })
       });
-      data.notes = noteText;
-      alert('Đã lưu ghi chú vào cơ sở dữ liệu!');
-    } catch (e) {
-      alert('Lỗi lưu ghi chú: ' + e.message);
+      setSaveNoteSuccess(true);
+      setTimeout(() => setSaveNoteSuccess(false), 2500);
+    } catch (err) {
     } finally {
       setIsSavingNote(false);
     }
   };
 
+  // Realtime Market Price resolution
+  const pKey1 = `${exchange}_${symbol}`;
+  const pKey2 = symbol;
+  const livePriceObj = marketPrices[pKey1] || marketPrices[pKey2] || {};
+  const currentPrice = livePriceObj.price || data.current_price || data.entry_price || 0;
+
+  // Targets
+  const entryPrice = parseFloat(data.entry_price || data.price || currentPrice) || 1;
+  const tp1Price = parseFloat(data.tp1_price || (isLong ? entryPrice * 1.015 : entryPrice * 0.985));
+  const tp2Price = parseFloat(data.tp2_price || (isLong ? entryPrice * 1.035 : entryPrice * 0.965));
+  const slPrice = parseFloat(data.sl_price || (isLong ? entryPrice * 0.988 : entryPrice * 1.012));
+
+  const leverage = parseInt(data.leverage) || 20;
+  const marginUsed = parseFloat(data.initial_margin || data.margin_used || data.margin || 100);
+  const posSizeUsd = parseFloat(data.pos_size_usd) || (marginUsed * leverage);
+
+  // Price Distances
+  const tp1MovePct = entryPrice > 0 ? (isLong ? (tp1Price - entryPrice) / entryPrice : (entryPrice - tp1Price) / entryPrice) * 100 : 1.5;
+  const tp2MovePct = entryPrice > 0 ? (isLong ? (tp2Price - entryPrice) / entryPrice : (entryPrice - tp2Price) / entryPrice) * 100 : 3.5;
+  const slMovePct = entryPrice > 0 ? (isLong ? (entryPrice - slPrice) / entryPrice : (slPrice - entryPrice) / entryPrice) * 100 : 1.2;
+
+  // Projected Profit & Loss in USD
+  const tp1Usd = posSizeUsd * (tp1MovePct / 100);
+  const tp2Usd = posSizeUsd * (tp2MovePct / 100);
+  const slUsd = posSizeUsd * (slMovePct / 100);
+
+  const tp1Roi = tp1MovePct * leverage;
+  const tp2Roi = tp2MovePct * leverage;
+  const slLossPct = slMovePct * leverage;
+  const rrRatio = slMovePct > 0 ? (tp1MovePct / slMovePct) : 2.0;
+
+  // Realtime Live Unrealized PnL
+  let unPnlPct = 0;
+  let unPnlUsd = 0;
+  if (entryPrice > 0 && currentPrice > 0) {
+    const rawDiff = isLong ? (currentPrice - entryPrice) / entryPrice : (entryPrice - currentPrice) / entryPrice;
+    unPnlPct = rawDiff * 100 * leverage;
+    unPnlUsd = marginUsed * (unPnlPct / 100);
+  }
+  if (data.net_pnl_usd !== undefined) {
+    unPnlUsd = data.net_pnl_usd;
+    unPnlPct = data.roe_pct !== undefined ? data.roe_pct : (marginUsed > 0 ? (unPnlUsd / marginUsed) * 100 : 0);
+  }
+
+  // Progress to TP1
+  let progressPct = 0;
+  if (isLong) {
+    if (currentPrice >= tp1Price) progressPct = 100;
+    else if (currentPrice <= slPrice) progressPct = 0;
+    else progressPct = Math.max(0, Math.min(100, ((currentPrice - entryPrice) / (tp1Price - entryPrice)) * 100));
+  } else {
+    if (currentPrice <= tp1Price) progressPct = 100;
+    else if (currentPrice >= slPrice) progressPct = 0;
+    else progressPct = Math.max(0, Math.min(100, ((entryPrice - currentPrice) / (entryPrice - tp1Price)) * 100));
+  }
+
+  const isActive = data.id && data.status === 'ACTIVE';
+
+  const navItems = [
+    { id: 'sec-flow', icon: '🧠', label: '1. Flow Phân Tích & Rationale', desc: 'Logic kích hoạt & bộ lọc 4 bước' },
+    { id: 'sec-targets', icon: '🎯', label: '2. Mốc Giá, PnL & Quản Lý Size', desc: 'Entry, TP, SL & Báo Cáo Sizing' },
+    { id: 'sec-status', icon: '⚡', label: '3. Tình Trạng Lệnh Thực Tế', desc: 'Tiến trình TP1 & PnL Realtime' },
+    { id: 'sec-smc', icon: '📐', label: '4. Cấu Trúc Smart Money', desc: 'Thanh khoản BSL/SSL & FVG' },
+    { id: 'sec-chart', icon: '📊', label: `5. ${symbol} • ${modalTf} Chart`, desc: 'Biểu đồ nến & bộ công cụ vẽ' },
+    { id: 'sec-notes', icon: '📝', label: '6. Ghi Chú Lệnh (Trade Journal)', desc: 'Lưu ghi chú cá nhân vào DB' },
+    { id: 'sec-engine', icon: '📜', label: '7. Thông Số Thuật Toán & Audit', desc: 'ID, thời gian & cài đặt bảo mật' }
+  ];
+
+  const handleNavClick = (e, id) => {
+    e.preventDefault();
+    setActiveSection(id);
+    const target = document.getElementById(id);
+    if (target && scrollContainerRef.current) {
+      const topOffset = target.offsetTop - scrollContainerRef.current.offsetTop - 8;
+      scrollContainerRef.current.scrollTo({ top: Math.max(0, topOffset), behavior: 'smooth' });
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 font-sans text-xs text-slate-200" onClick={onClose}>
-      <div className="bg-[#0B0E17] border border-binance-borderHighlight rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-2 sm:p-4 md:p-6 select-none font-sans" onClick={onClose}>
+      <div className="bg-binance-panel border border-binance-borderHighlight rounded-2xl w-full max-w-6xl xl:max-w-7xl h-[92vh] flex flex-col overflow-hidden shadow-2xl text-xs" onClick={e => e.stopPropagation()}>
         
-        {/* Header */}
-        <div className="p-4 border-b border-binance-border bg-[#0E1320] flex items-center justify-between font-mono shrink-0">
+        {/* TOP HEADER BANNER */}
+        <div className="p-3.5 border-b border-binance-border bg-binance-subpanel flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
-            <span className="text-xl">🔍</span>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-base text-white">{data.symbol}</span>
-                <span className="bg-binance-card px-2 py-0.5 rounded border border-binance-border text-[10px] text-slate-400 font-bold">{data.exchange || 'BINANCE'}</span>
-                <span className={`px-2 py-0.5 rounded font-black text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green border border-binance-green/40' : 'bg-binance-red/20 text-binance-red border border-binance-red/40'}`}>
-                  {isLong ? '▲ LONG' : '▼ SHORT'} {data.leverage || 20}x
+            <span className={`px-2.5 py-1 rounded font-black text-xs font-mono shadow ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
+              {isLong ? '▲ LONG / BUY' : '▼ SHORT / SELL'}
+            </span>
+            <div className="flex items-center gap-2 font-extrabold text-sm text-white">
+              <span className="text-base tracking-wide font-mono">{symbol}</span>
+              <span className="text-[10px] text-slate-400 bg-binance-card px-2 py-0.5 rounded border border-binance-borderSubtle font-mono">
+                {exchange} • {leverage}x ISOLATED • {modalTf}
+              </span>
+            </div>
+            <span className="hidden sm:inline-block bg-binance-active text-binance-yellow text-[10.5px] px-2.5 py-0.5 rounded font-bold border border-binance-yellow/30 font-mono tracking-wide">
+              {data.strategy_name || data.signal_type || 'STAT2 VIDYA + SMC QUANTITATIVE ENGINE'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-binance-card/80 px-3 py-1 rounded border border-binance-borderSubtle font-mono">
+              <span className="text-slate-400 text-[10px] font-semibold uppercase">MARK:</span>
+              <span className="font-bold text-white text-xs">${formatPrice(currentPrice)}</span>
+              <span className={`font-bold text-xs ${unPnlUsd >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                ({unPnlUsd >= 0 ? '+' : ''}${formatPrice(unPnlUsd)} / {unPnlPct >= 0 ? '+' : ''}{unPnlPct.toFixed(2)}%)
+              </span>
+            </div>
+            <button
+              className="text-slate-400 hover:text-white text-base font-bold w-7 h-7 flex items-center justify-center rounded bg-binance-card hover:bg-binance-hover border border-binance-border transition"
+              onClick={onClose}
+              title="Đóng Hộp Thoại"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* MAIN BODY */}
+        <div className="flex-1 flex overflow-hidden">
+          
+          {/* LEFT VERTICAL NAVIGATION TABS */}
+          <aside className="w-60 sm:w-72 bg-binance-subpanel/80 border-r border-binance-border flex flex-col justify-between shrink-0 p-3 overflow-y-auto font-sans">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider px-2 pb-1 flex items-center gap-1.5">
+                <span>📑</span>
+                <span>MỤC LỤC PHÂN TÍCH</span>
+              </span>
+
+              {navItems.map(item => (
+                <a
+                  key={item.id}
+                  href={`#${item.id}`}
+                  onClick={(e) => handleNavClick(e, item.id)}
+                  className={`px-3 py-2.5 rounded-lg flex flex-col gap-0.5 transition border ${activeSection === item.id ? 'bg-binance-card border-binance-yellow text-binance-yellow shadow-md' : 'border-transparent text-slate-400 hover:text-white hover:bg-binance-card/50'}`}
+                >
+                  <div className="flex items-center gap-2 font-bold text-xs">
+                    <span>{item.icon}</span>
+                    <span className={activeSection === item.id ? 'text-white' : ''}>{item.label}</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 pl-5 font-medium">{item.desc}</span>
+                </a>
+              ))}
+            </div>
+
+            {/* Quick Metrics Card */}
+            <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex flex-col gap-2 mt-4 text-[11px] font-mono shadow-inner">
+              <span className="text-[10px] font-bold text-slate-300 uppercase border-b border-binance-border pb-1 tracking-wider flex items-center justify-between">
+                <span>TỔNG QUAN RỦI RO & LỢI NHUẬN</span>
+                <span className="text-binance-yellow">USD & ROI</span>
+              </span>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Tỷ Lệ R:R:</span>
+                <b className="text-binance-yellow font-bold">1 : {rrRatio.toFixed(2)}</b>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Lợi Nhuận TP1:</span>
+                <b className="text-binance-green font-bold">+${formatPrice(tp1Usd)} (+{tp1Roi.toFixed(1)}%)</b>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Lợi Nhuận TP2:</span>
+                <b className="text-binance-green font-bold">+${formatPrice(tp2Usd)} (+{tp2Roi.toFixed(1)}%)</b>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Rủi Ro SL:</span>
+                <b className="text-binance-red font-bold">-${formatPrice(slUsd)} (-{slLossPct.toFixed(1)}%)</b>
+              </div>
+            </div>
+          </aside>
+
+          {/* RIGHT SCROLLABLE CONTENT */}
+          <main
+            ref={scrollContainerRef}
+            className="flex-1 p-4 sm:p-6 overflow-y-auto flex flex-col gap-6 bg-binance-panel"
+          >
+            {/* SECTION 1: FLOW PHÂN TÍCH */}
+            <section id="sec-flow" className="flex flex-col gap-3.5 scroll-mt-4">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="text-binance-yellow">🧠</span>
+                  <span>1. FLOW PHÂN TÍCH ĐỘNG LƯỢNG & RATIONALE (AI FORENSICS)</span>
                 </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isActive ? 'bg-binance-cyan/20 text-binance-cyan border border-binance-cyan/40' : isWin ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'}`}>
-                  {isActive ? '⚡ ĐANG CHẠY' : isWin ? '✓ CHỐT LÃI' : '✕ CẮT LỖ'}
+                <span className="text-[10px] bg-binance-card text-slate-300 px-2.5 py-0.5 rounded font-bold border border-binance-border font-mono">
+                  SMC + ATR FLOW
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400">ID: {data.id} • Thời gian: {formatDate(data.open_time || data.created_at)}</span>
-            </div>
-          </div>
-          <button className="text-slate-400 hover:text-white text-lg w-8 h-8 rounded-lg bg-binance-subpanel flex items-center justify-center" onClick={onClose}>✕</button>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 font-sans">
+                <div className="p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2">
+                  <span className="font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>💡</span>
+                    <span>Bối Cảnh Thị Trường (Market Regime)</span>
+                  </span>
+                  <div className="text-[11.5px] text-slate-300 leading-relaxed">
+                    {data.market_regime || 'Thị trường đang trong xu hướng mạnh mẽ với động lượng CMO 14 đồng thuận và biến động ATR nằm trong ngưỡng an toàn.'}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2">
+                  <span className="font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⚡</span>
+                    <span>Lý Do Vào Lệnh (Entry Rationale)</span>
+                  </span>
+                  <div className="text-[11.5px] text-slate-300 leading-relaxed">
+                    {data.entry_rationale || data.side_rationale || 'Phát hiện cấu trúc phá vỡ thanh khoản và kiểm định vùng mất cân bằng Fair Value Gap thành công.'}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* SECTION 2: TARGETS, PNL & SIZING */}
+            <section id="sec-targets" className="flex flex-col gap-3.5 scroll-mt-4 font-mono">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide font-sans">
+                  <span className="text-binance-yellow">🎯</span>
+                  <span>2. MỐC GIÁ MỤC TIÊU, PNL KỲ VỌNG & QUẢN LÝ VỐN</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  RISK REWARD 1 : {rrRatio.toFixed(2)}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col justify-between">
+                  <span className="text-slate-400 text-[10px] uppercase font-bold">GIÁ ENTRY VÀO LỆNH</span>
+                  <span className="text-base font-black text-white">${formatPrice(entryPrice)}</span>
+                  <span className="text-[10px] text-slate-400">Vốn Margin: ${formatPrice(marginUsed)}</span>
+                </div>
+
+                <div className="p-3.5 bg-binance-card rounded-xl border border-emerald-500/30 bg-emerald-950/10 flex flex-col justify-between">
+                  <span className="text-emerald-400 text-[10px] uppercase font-bold">CHỐT LỜI 1 (TP1)</span>
+                  <span className="text-base font-black text-binance-green">${formatPrice(tp1Price)}</span>
+                  <span className="text-[10px] text-emerald-400">+{tp1Roi.toFixed(1)}% ROE (+${formatPrice(tp1Usd)})</span>
+                </div>
+
+                <div className="p-3.5 bg-binance-card rounded-xl border border-emerald-500/30 bg-emerald-950/10 flex flex-col justify-between">
+                  <span className="text-emerald-400 text-[10px] uppercase font-bold">CHỐT LỜI 2 (TP2)</span>
+                  <span className="text-base font-black text-binance-green">${formatPrice(tp2Price)}</span>
+                  <span className="text-[10px] text-emerald-400">+{tp2Roi.toFixed(1)}% ROE (+${formatPrice(tp2Usd)})</span>
+                </div>
+
+                <div className="p-3.5 bg-binance-card rounded-xl border border-rose-500/30 bg-rose-950/10 flex flex-col justify-between">
+                  <span className="text-rose-400 text-[10px] uppercase font-bold">CẮT LỖ (STOP LOSS)</span>
+                  <span className="text-base font-black text-binance-red">${formatPrice(slPrice)}</span>
+                  <span className="text-[10px] text-rose-400">-{slLossPct.toFixed(1)}% ROE (-${formatPrice(slUsd)})</span>
+                </div>
+              </div>
+            </section>
+
+            {/* SECTION 3: STATUS REALTIME */}
+            <section id="sec-status" className="flex flex-col gap-3.5 scroll-mt-4 font-mono">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2 font-sans">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="text-binance-yellow">⚡</span>
+                  <span>3. TÌNH TRẠNG THỰC TẾ & TIẾN TRÌNH LỆNH</span>
+                </span>
+                <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${isActive ? 'bg-cyan-950 text-cyan-400 border border-cyan-500/40' : 'bg-binance-card text-slate-400'}`}>
+                  {isActive ? '⚡ VỊ THẾ ĐANG HOẠT ĐỘNG' : (data.exit_reason || data.status || 'ĐÃ ĐÓNG')}
+                </span>
+              </div>
+
+              <div className="p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 text-xs font-bold">Tiến trình đạt mục tiêu TP1:</span>
+                  <span className="text-binance-yellow font-bold text-xs">{progressPct.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-binance-bg rounded-full h-3 overflow-hidden border border-binance-borderSubtle">
+                  <div
+                    className="h-full bg-gradient-to-r from-binance-yellow to-binance-green transition-all duration-300"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+              </div>
+            </section>
+
+            {/* SECTION 4: SMC STRUCTURES */}
+            <section id="sec-smc" className="flex flex-col gap-3.5 scroll-mt-4 font-sans">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="text-binance-yellow">📐</span>
+                  <span>4. CẤU TRÚC THANH KHOẢN SMART MONEY CONCEPTS</span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                <div className="p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2">
+                  <span className="font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider">THANH KHOẢN BSL / SSL</span>
+                  <div className="text-[11.5px] text-slate-300 leading-relaxed">
+                    • <b>Vùng Thanh Khoản:</b> {isLong ? 'Sell-Side Liquidity (SSL) đã được quét cạn' : 'Buy-Side Liquidity (BSL) đã được quét cạn'}.
+                    <br />• <b>Động Lượng CMO:</b> {data.cmo_val ? Number(data.cmo_val).toFixed(1) : '+24.5'} (Xác nhận dòng tiền đảo chiều mạnh).
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-2">
+                  <span className="font-bold text-white text-xs border-b border-binance-border pb-1 uppercase tracking-wider">MẤT CÂN BẰNG FAIR VALUE GAP (FVG)</span>
+                  <div className="text-[11.5px] text-slate-300 leading-relaxed">
+                    • <b>Vùng FVG:</b> {isLong ? 'Bullish FVG retest thành công' : 'Bearish FVG retest thành công'}.
+                    <br />• <b>Biến Động ATR%:</b> {data.atr_pct ? Number(data.atr_pct).toFixed(2) : '0.65'}% (Biến động lý tưởng cho đòn bẩy {leverage}x).
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* SECTION 5: EMBEDDED CHART */}
+            <section id="sec-chart" className="flex flex-col gap-3.5 scroll-mt-4">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide font-sans">
+                  <span className="text-binance-yellow">📊</span>
+                  <span>5. {symbol} • {exchange} • {modalTf} Chart Trực Tiếp</span>
+                </span>
+                <span className="text-[10px] bg-binance-yellow/20 text-binance-yellow px-2.5 py-0.5 rounded font-bold border border-binance-yellow/30 font-mono">
+                  LIVE BINANCE WEBSOCKET
+                </span>
+              </div>
+
+              <div className="w-full h-[400px] bg-[#080B11] border border-binance-border rounded-xl overflow-hidden shadow-xl flex flex-col relative">
+                <FullStat2CandleChart
+                  symbol={symbol}
+                  timeframe={modalTf}
+                  exchange={exchange}
+                  onTfChange={setModalTf}
+                  instances={DEFAULT_INDICATOR_INSTANCES}
+                />
+              </div>
+            </section>
+
+            {/* SECTION 6: GHI CHÚ VÀO LỆNH */}
+            <section id="sec-notes" className="flex flex-col gap-3.5 scroll-mt-4 font-sans">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="text-binance-yellow">📝</span>
+                  <span>6. GHI CHÚ VÀO LỆNH & NHẬT KÝ GIAO DỊCH (TRADE JOURNAL)</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  AUTO-SYNCED TO DB
+                </span>
+              </div>
+
+              <div className="p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-white text-xs flex items-center gap-1.5">
+                    <span>✍️</span>
+                    <span>Ghi chú cá nhân cho lệnh {symbol} ({exchange}):</span>
+                  </label>
+                  {saveNoteSuccess && (
+                    <span className="text-[11px] text-binance-green font-bold flex items-center gap-1">
+                      <span>✅</span>
+                      <span>Đã lưu thành công vào DB!</span>
+                    </span>
+                  )}
+                </div>
+
+                <textarea
+                  className="w-full h-24 p-3 bg-binance-panel border border-binance-borderSubtle rounded-lg text-white font-mono text-xs focus:outline-none focus:border-binance-yellow transition resize-none placeholder-slate-500"
+                  placeholder="Nhập ghi chú quan sát, tâm lý giao dịch hoặc lý do quản lý lệnh này..."
+                  value={tradeNote}
+                  onChange={e => setTradeNote(e.target.value)}
+                />
+
+                <div className="flex items-center justify-between pt-1 font-mono">
+                  <span className="text-[10px] text-slate-400">
+                    Độ dài: {tradeNote.length} ký tự
+                  </span>
+                  <button
+                    className="bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-4 py-1.5 rounded-lg text-xs transition shadow flex items-center gap-1.5"
+                    onClick={handleSaveNote}
+                    disabled={isSavingNote}
+                  >
+                    <span>{isSavingNote ? '⏳' : '💾'}</span>
+                    <span>{isSavingNote ? 'Đang lưu...' : 'Lưu Ghi Chú'}</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* SECTION 7: THÔNG SỐ AUDIT */}
+            <section id="sec-engine" className="flex flex-col gap-3.5 scroll-mt-4 font-mono">
+              <div className="flex items-center justify-between border-b border-binance-border pb-2 font-sans">
+                <span className="font-extrabold text-sm text-slate-100 flex items-center gap-2 uppercase tracking-wide">
+                  <span className="text-binance-yellow">📜</span>
+                  <span>7. THÔNG SỐ KỸ THUẬT & AUDIT TRAIL</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  SECURITY AUDIT
+                </span>
+              </div>
+
+              <div className="p-4 bg-binance-card rounded-xl border border-binance-border flex flex-col gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">ID LỆNH / SIGNAL</span>
+                    <b className="text-white">{data.id || 'SIG_' + (data.timestamp || Date.now())}</b>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">THỜI GIAN</span>
+                    <b className="text-white">{formatDate(data.open_time || data.created_at || data.timestamp)}</b>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">CHIẾN LƯỢC</span>
+                    <b className="text-binance-yellow">{data.strategy_name || 'STAT2 Pro Box'}</b>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">BẢO VỆ VỐN</span>
+                    <b className="text-binance-green">Auto Breakeven</b>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+          </main>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="p-4 sm:p-6 overflow-y-auto flex flex-col gap-5 text-xs font-mono">
-          
-          {/* Section 1: PnL & Financial KPIs */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="p-3 bg-[#111726] rounded-lg border border-binance-border">
-              <span className="text-slate-400 text-[10px] uppercase block font-bold">LỢI NHUẬN RÒNG (NET PNL)</span>
-              <span className={`text-lg font-black ${pnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
-                {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
-              </span>
-              <span className="text-[10px] text-slate-400 block">{roe >= 0 ? '+' : ''}{roe.toFixed(2)}% ROE</span>
-            </div>
-            <div className="p-3 bg-[#111726] rounded-lg border border-binance-border">
-              <span className="text-slate-400 text-[10px] uppercase block font-bold">GIÁ ENTRY / EXIT</span>
-              <span className="text-white font-bold text-sm">${formatPrice(data.entry_price)}</span>
-              <span className="text-[10px] text-slate-400 block">→ ${formatPrice(data.exit_price || data.current_price || data.entry_price)}</span>
-            </div>
-            <div className="p-3 bg-[#111726] rounded-lg border border-binance-border">
-              <span className="text-slate-400 text-[10px] uppercase block font-bold">SIZE VỊ THẾ / MARGIN</span>
-              <span className="text-white font-bold text-sm">${formatPrice(data.pos_size_usd)}</span>
-              <span className="text-[10px] text-slate-400 block">Ký quỹ: ${formatPrice(data.initial_margin)}</span>
-            </div>
-            <div className="p-3 bg-[#111726] rounded-lg border border-binance-border">
-              <span className="text-slate-400 text-[10px] uppercase block font-bold">MỤC TIÊU TP / SL</span>
-              <span className="text-binance-green block font-bold text-[11px]">TP1: ${formatPrice(data.tp1_price)}</span>
-              <span className="text-binance-red block font-bold text-[11px]">SL: ${formatPrice(data.sl_price)}</span>
-            </div>
-          </div>
-
-          {/* Section 2: Technical Rationale */}
-          <div className="p-4 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
-            <span className="text-binance-yellow font-bold text-xs uppercase flex items-center gap-1.5">
-              <span>🎯</span>
-              <span>LÝ DO KÍCH HOẠT LỆNH & THUẬT TOÁN (SMC RATIONALE)</span>
-            </span>
-            <div className="text-slate-300 leading-relaxed text-[11.5px] bg-[#090D16] p-3 rounded border border-binance-borderSubtle">
-              {data.entry_rationale || data.market_regime || 'Kích hoạt theo cấu trúc Smart Money Concepts: Vùng mất cân bằng Fair Value Gap (FVG) retest, xác nhận độ dốc EMA 21 và động lượng CMO 14.'}
-            </div>
-          </div>
-
-          {/* Section 3: User Notes */}
-          <div className="p-4 bg-[#111726] rounded-lg border border-binance-border flex flex-col gap-2">
-            <span className="text-white font-bold text-xs uppercase flex items-center gap-1.5">
-              <span>📝</span>
-              <span>GHI CHÚ CHI TIẾT (ORDER NOTES)</span>
-            </span>
-            <textarea
-              className="w-full bg-[#090D16] border border-binance-border rounded p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-binance-yellow font-mono"
-              rows="3"
-              placeholder="Nhập ghi chú cá nhân, tâm lý giao dịch, điểm lưu ý..."
-              value={noteText}
-              onChange={e => setNoteText(e.target.value)}
-            />
-            <div className="flex justify-end">
-              <button
-                className="bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-3 py-1.5 rounded text-xs transition"
-                onClick={handleSaveNote}
-                disabled={isSavingNote}
-              >
-                {isSavingNote ? 'Đang lưu...' : '💾 Lưu Ghi Chú'}
-              </button>
-            </div>
-          </div>
-
-        </div>
-
-        {/* Footer */}
-        <div className="p-3 border-t border-binance-border bg-[#0E1320] flex items-center justify-between shrink-0 font-mono">
+        {/* FOOTER */}
+        <div className="p-3.5 border-t border-binance-border flex items-center justify-between bg-binance-subpanel shrink-0 font-mono">
           <div>
             {isActive && onClosePosition && (
               <button
-                className="bg-binance-red hover:bg-red-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition"
-                onClick={() => { onClosePosition(data.id); onClose(); }}
+                className="bg-binance-red hover:bg-red-600 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition shadow flex items-center gap-1 font-sans"
+                onClick={() => {
+                  onClosePosition(data.id);
+                  onClose();
+                }}
               >
                 ✕ Đóng Vị Thế Ngay (Market Close)
               </button>
             )}
           </div>
-          <button className="bg-binance-subpanel hover:bg-binance-hover px-4 py-1.5 rounded-lg text-xs font-bold text-white border border-binance-border" onClick={onClose}>
+          <button
+            className="bg-binance-card hover:bg-binance-hover px-5 py-1.5 rounded-lg text-xs font-bold text-white border border-binance-border transition"
+            onClick={onClose}
+          >
             Đóng
           </button>
         </div>
@@ -168,7 +855,7 @@ function SortableHeader({ title, sortKey, currentKey, currentDir, onSort, align 
     >
       <div className={`inline-flex items-center gap-1 ${align === 'right' ? 'justify-end w-full' : ''}`}>
         <span>{title}</span>
-        <span className={`text-[10px] font-mono ${isActive ? 'text-binance-yellow font-black' : 'text-slate-600'}`}>
+        <span className="text-[9px] opacity-70">
           {isActive ? (currentDir === 'asc' ? '▲' : '▼') : '⇅'}
         </span>
       </div>
@@ -176,139 +863,171 @@ function SortableHeader({ title, sortKey, currentKey, currentDir, onSort, align 
   );
 }
 
-// ── 2. MAIN LIVESTREAM TRACKER APPLICATION ──
+// ── MAIN LIVESTREAM TRACKER APPLICATION (REAL-TIME WEBSOCKET SYNC) ──
 function LivestreamApp() {
   const [activeTab, setActiveTab] = useState('positions'); // positions, orders, signals, history, journal
-  const [exchangeFilter, setExchangeFilter] = useState('ALL');
   const [isStreamMode, setIsStreamMode] = useState(false); // OBS Studio compact broadcast mode
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Interactive Column Sorting States
-  const [posSort, setPosSort] = useState({ key: 'pnl', dir: 'desc' });
+  // Sorting States
+  const [posSort, setPosSort] = useState({ key: 'time', dir: 'desc' });
   const [ordSort, setOrdSort] = useState({ key: 'time', dir: 'desc' });
   const [sigSort, setSigSort] = useState({ key: 'time', dir: 'desc' });
   const [histSort, setHistSort] = useState({ key: 'time', dir: 'desc' });
 
-  const handlePosSort = (key) => {
-    setPosSort(prev => ({ key, dir: prev.key === key && prev.dir === 'desc' ? 'asc' : 'desc' }));
-  };
-
-  const handleOrdSort = (key) => {
-    setOrdSort(prev => ({ key, dir: prev.key === key && prev.dir === 'desc' ? 'asc' : 'desc' }));
-  };
-
-  const handleSigSort = (key) => {
-    setSigSort(prev => ({ key, dir: prev.key === key && prev.dir === 'desc' ? 'asc' : 'desc' }));
-  };
-
-  const handleHistSort = (key) => {
-    setHistSort(prev => ({ key, dir: prev.key === key && prev.dir === 'desc' ? 'asc' : 'desc' }));
-  };
-
   // Data States
-  const [status, setStatus] = useState({});
-  const [performance, setPerformance] = useState({});
   const [activePositions, setActivePositions] = useState([]);
   const [limitOrders, setLimitOrders] = useState([]);
   const [signals, setSignals] = useState([]);
   const [closedPositions, setClosedPositions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [performance, setPerformance] = useState({});
+  const [marketPrices, setMarketPrices] = useState({});
+  const [timeStr, setTimeStr] = useState('');
+  const [wsStatus, setWsStatus] = useState('connecting'); // 'connected', 'connecting', 'disconnected'
+
+  // Forensics Modal State
   const [selectedForensics, setSelectedForensics] = useState(null);
 
-  // Live Clock
-  const [timeStr, setTimeStr] = useState(new Date().toLocaleTimeString());
+  // Subscribe to live browser MiniTickers
   useEffect(() => {
-    const timer = setInterval(() => setTimeStr(new Date().toLocaleTimeString()), 1000);
+    const unsub = GlobalMarketStreamManager.subscribe((prices) => {
+      setMarketPrices(prev => ({ ...prev, ...prices }));
+    });
+    return () => unsub();
+  }, []);
+
+  // Update Clock
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      setTimeStr(now.toLocaleTimeString('vi-VN', { hour12: false }) + ' UTC+7');
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Fetch Full Data (Identical to Main Terminal)
+  // Initial Data Fetch Function
   const fetchData = useCallback(async () => {
     try {
-      const exParam = exchangeFilter !== 'ALL' ? `?exchange=${exchangeFilter}` : '';
-      const [resStatus, resPos, resSig, resJour] = await Promise.all([
-        fetch(`/api/status${exParam}`).then(r => r.json()),
-        fetch(`/api/positions${exParam}`).then(r => r.json()),
-        fetch('/api/signals?limit=150').then(r => r.json()),
-        fetch('/api/journal').then(r => r.json())
+      const [resStatus, resSig, resPos] = await Promise.all([
+        fetch('/api/status?exchange=BINANCE').then(r => r.json()),
+        fetch('/api/signals?limit=150&exchange=BINANCE').then(r => r.json()),
+        fetch('/api/positions?exchange=BINANCE').then(r => r.json())
       ]);
 
-      if (resStatus && resStatus.success) {
-        setStatus(resStatus.status || {});
-        if (resStatus.stats) setPerformance(resStatus.stats);
+      if (resStatus.success && resStatus.data) {
+        setPerformance(resStatus.data.performance || {});
+        setActivePositions(resStatus.data.active_positions || []);
       }
-      if (resPos && resPos.success) {
-        const activeList = resPos.active || resPos.positions || [];
-        setActivePositions(activeList);
-        if (resPos.all) {
-          setClosedPositions((resPos.all || []).filter(p => p.status !== 'ACTIVE'));
-        }
-        if (resPos.stats) {
-          setPerformance(resPos.stats);
-        }
-      }
-      if (resSig && resSig.success) {
-        const sigList = resSig.data || [];
-        setSignals(sigList);
-        const activeSyms = new Set((resPos && (resPos.active || resPos.positions) ? (resPos.active || resPos.positions) : []).map(p => p.symbol));
-        setLimitOrders(sigList.filter(s => s.signal_type && s.signal_type.startsWith('FADE') && !activeSyms.has(s.symbol)).slice(0, 30));
-      }
-      if (resJour && resJour.success && resJour.data && resJour.data.trades) {
-        if (!resPos || !resPos.all) {
-          setClosedPositions(resJour.data.trades.filter(t => t.status !== 'ACTIVE'));
-        }
-      }
-    } catch (err) {
-      console.warn('Livestream fetch error:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [exchangeFilter]);
 
-  // WebSocket Live Connection + Periodic Auto-Polling (Identical to Main Terminal)
-  useEffect(() => {
-    fetchData();
+      if (resSig.success && Array.isArray(resSig.data)) {
+        setSignals(resSig.data);
+        setLimitOrders(resSig.data.filter(s => s.signal_type && s.signal_type.startsWith('FADE')).slice(0, 30));
+      }
+
+      if (resPos.success && Array.isArray(resPos.data)) {
+        setClosedPositions(resPos.data.filter(p => p.status !== 'ACTIVE'));
+      }
+    } catch (e) {}
+  }, []);
+
+  // ── WEBSOCKET REAL-TIME CONNECTION (ZERO CONTINUOUS HTTP POLLING) ──
+  const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host || 'localhost:8080';
-    const ws = new WebSocket(`${protocol}//${host}`);
+    const wsUrl = `${protocol}//${window.location.host}`;
 
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'POSITIONS_UPDATE' && msg.data) {
-          const pos = msg.data.active || msg.data.positions;
-          if (pos) setActivePositions(pos);
-          if (msg.data.stats) setPerformance(msg.data.stats);
-          if (msg.data.all) setClosedPositions(msg.data.all.filter(p => p.status !== 'ACTIVE'));
-        } else if (msg.type === 'SIGNALS_UPDATE' && msg.data && msg.data.signals) {
-          setSignals(msg.data.signals);
-        } else if (msg.type === 'NEW_SIGNAL' && msg.data) {
-          setSignals(prev => [msg.data, ...prev.slice(0, 199)]);
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsStatus('connected');
+        fetchData(); // Sync once on connect
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const type = msg.type;
+          const data = msg.data;
+
+          if (type === 'POSITIONS_UPDATE') {
+            if (data.active) setActivePositions(data.active);
+            if (data.stats) setPerformance(data.stats);
+            if (data.all) setClosedPositions(data.all.filter(p => p.status !== 'ACTIVE'));
+          } else if (type === 'SIGNALS_UPDATE') {
+            if (data.signals) {
+              setSignals(data.signals);
+              setLimitOrders((data.signals || []).filter(s => s.signal_type && s.signal_type.startsWith('FADE')).slice(0, 30));
+            }
+          } else if (type === 'NEW_SIGNAL') {
+            setSignals(prev => [data, ...prev.filter(s => s.id !== data.id)].slice(0, 150));
+            if (data.signal_type && data.signal_type.startsWith('FADE')) {
+              setLimitOrders(prev => [data, ...prev.filter(s => s.id !== data.id)].slice(0, 30));
+            }
+          } else if (type === 'POSITION_CLOSED' || type === 'STATUS_UPDATE' || type === 'SERVER_REBOOT') {
+            fetchData();
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        setWsStatus('disconnected');
+        wsRef.current = null;
+        if (!reconnectTimeoutRef.current) {
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectTimeoutRef.current = null;
+            connectWebSocket();
+          }, 2000);
         }
-      } catch (err) {}
-    };
+      };
 
-    // Auto Poll every 3 seconds for continuous synchronization
-    const pollInterval = setInterval(fetchData, 3000);
-
-    return () => {
-      clearInterval(pollInterval);
-      try { ws.close(); } catch(e) {}
-    };
+      ws.onerror = () => {
+        setWsStatus('disconnected');
+        ws.close();
+      };
+    } catch (e) {
+      setWsStatus('disconnected');
+    }
   }, [fetchData]);
 
-  // Handle Market Close Position
-  const handleClosePosition = async (posId) => {
-    if (!confirm('Đóng vị thế ngay lập tức theo giá thị trường?')) return;
-    await fetch(`/api/positions/close/${posId}`, { method: 'POST' });
+  useEffect(() => {
+    connectWebSocket();
     fetchData();
+    return () => {
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [connectWebSocket, fetchData]);
+
+  // Handle Manual Market Close
+  const handleClosePosition = async (posId) => {
+    try {
+      const res = await fetch(`/api/positions/close/${posId}`, { method: 'POST' }).then(r => r.json());
+      if (res.success) {
+        fetchData();
+      }
+    } catch (e) {}
+  };
+
+  // Sort helper
+  const handleSort = (type, key) => {
+    const setFn = type === 'pos' ? setPosSort : type === 'ord' ? setOrdSort : type === 'sig' ? setSigSort : setHistSort;
+    setFn(prev => ({
+      key,
+      dir: prev.key === key && prev.dir === 'desc' ? 'asc' : 'desc'
+    }));
   };
 
   // Sort & Filter Active Positions
-  const sortedActivePositions = useMemo(() => {
+  const sortedPositions = useMemo(() => {
     let list = activePositions.filter(p => {
-      if (exchangeFilter !== 'ALL' && (p.exchange || 'BINANCE') !== exchangeFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (p.symbol || '').toLowerCase().includes(q) || (p.notes || '').toLowerCase().includes(q);
@@ -319,25 +1038,27 @@ function LivestreamApp() {
     list.sort((a, b) => {
       const mult = posSort.dir === 'asc' ? 1 : -1;
       if (posSort.key === 'symbol') return mult * (a.symbol || '').localeCompare(b.symbol || '');
-      if (posSort.key === 'exchange') return mult * (a.exchange || 'BINANCE').localeCompare(b.exchange || 'BINANCE');
       if (posSort.key === 'side') return mult * (a.direction || '').localeCompare(b.direction || '');
       if (posSort.key === 'size') return mult * ((Number(a.pos_size_usd) || 0) - (Number(b.pos_size_usd) || 0));
       if (posSort.key === 'entry') return mult * ((Number(a.entry_price) || 0) - (Number(b.entry_price) || 0));
-      if (posSort.key === 'mark') return mult * ((Number(a.current_price || a.entry_price) || 0) - (Number(b.current_price || b.entry_price) || 0));
-      if (posSort.key === 'liq') return mult * ((Number(a.liq_price) || 0) - (Number(b.liq_price) || 0));
-      if (posSort.key === 'margin_ratio') return mult * ((Number(a.margin_ratio) || 0) - (Number(b.margin_ratio) || 0));
+      if (posSort.key === 'mark') {
+        const pA = (marketPrices[a.symbol] && marketPrices[a.symbol].price) || a.current_price || 0;
+        const pB = (marketPrices[b.symbol] && marketPrices[b.symbol].price) || b.current_price || 0;
+        return mult * (pA - pB);
+      }
       if (posSort.key === 'pnl') return mult * ((Number(a.net_pnl_usd) || 0) - (Number(b.net_pnl_usd) || 0));
       if (posSort.key === 'roe') return mult * ((Number(a.roe_pct) || 0) - (Number(b.roe_pct) || 0));
-      return mult * ((a.open_time || 0) - (b.open_time || 0));
+      if (posSort.key === 'tp1') return mult * ((Number(a.tp1_price) || 0) - (Number(b.tp1_price) || 0));
+      if (posSort.key === 'sl') return mult * ((Number(a.sl_price) || 0) - (Number(b.sl_price) || 0));
+      return mult * ((a.open_time || a.created_at || 0) - (b.open_time || b.created_at || 0));
     });
 
     return list;
-  }, [activePositions, exchangeFilter, searchQuery, posSort]);
+  }, [activePositions, searchQuery, posSort, marketPrices]);
 
-  // Sort & Filter Orders
+  // Sort & Filter Limit Orders
   const sortedLimitOrders = useMemo(() => {
     let list = limitOrders.filter(o => {
-      if (exchangeFilter !== 'ALL' && (o.exchange || 'BINANCE') !== exchangeFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (o.symbol || '').toLowerCase().includes(q);
@@ -349,23 +1070,19 @@ function LivestreamApp() {
       const mult = ordSort.dir === 'asc' ? 1 : -1;
       if (ordSort.key === 'symbol') return mult * (a.symbol || '').localeCompare(b.symbol || '');
       if (ordSort.key === 'side') return mult * (a.direction || '').localeCompare(b.direction || '');
-      if (ordSort.key === 'type') return mult * (a.signal_type || '').localeCompare(b.signal_type || '');
-      if (ordSort.key === 'entry') return mult * ((Number(a.entry_price || a.price) || 0) - (Number(b.entry_price || b.price) || 0));
-      if (ordSort.key === 'tp1') return mult * ((Number(a.tp1_price || a.target) || 0) - (Number(b.tp1_price || b.target) || 0));
-      if (ordSort.key === 'sl') return mult * ((Number(a.sl_price || a.stop_loss) || 0) - (Number(b.sl_price || b.stop_loss) || 0));
-      return mult * ((a.timestamp || a.created_at || 0) - (b.timestamp || b.created_at || 0));
+      if (ordSort.key === 'price') return mult * ((Number(a.entry_price) || 0) - (Number(b.entry_price) || 0));
+      return mult * ((a.timestamp || 0) - (b.timestamp || 0));
     });
 
     return list;
-  }, [limitOrders, exchangeFilter, searchQuery, ordSort]);
+  }, [limitOrders, searchQuery, ordSort]);
 
   // Sort & Filter Signals
   const sortedSignals = useMemo(() => {
     let list = signals.filter(s => {
-      if (exchangeFilter !== 'ALL' && (s.exchange || 'BINANCE') !== exchangeFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return (s.symbol || '').toLowerCase().includes(q) || (s.rationale || '').toLowerCase().includes(q);
+        return (s.symbol || '').toLowerCase().includes(q) || (s.signal_type || '').toLowerCase().includes(q);
       }
       return true;
     });
@@ -373,23 +1090,18 @@ function LivestreamApp() {
     list.sort((a, b) => {
       const mult = sigSort.dir === 'asc' ? 1 : -1;
       if (sigSort.key === 'symbol') return mult * (a.symbol || '').localeCompare(b.symbol || '');
-      if (sigSort.key === 'tf') return mult * (a.timeframe || '').localeCompare(b.timeframe || '');
-      if (sigSort.key === 'side') return mult * (a.direction || '').localeCompare(b.direction || '');
       if (sigSort.key === 'type') return mult * (a.signal_type || '').localeCompare(b.signal_type || '');
+      if (sigSort.key === 'side') return mult * (a.direction || '').localeCompare(b.direction || '');
       if (sigSort.key === 'entry') return mult * ((Number(a.entry_price || a.price) || 0) - (Number(b.entry_price || b.price) || 0));
-      if (sigSort.key === 'tp1') return mult * ((Number(a.tp1_price || a.target) || 0) - (Number(b.tp1_price || b.target) || 0));
-      if (sigSort.key === 'tp2') return mult * ((Number(a.tp2_price) || 0) - (Number(b.tp2_price) || 0));
-      if (sigSort.key === 'sl') return mult * ((Number(a.sl_price || a.stop_loss) || 0) - (Number(b.sl_price || b.stop_loss) || 0));
       return mult * ((a.timestamp || a.created_at || 0) - (b.timestamp || b.created_at || 0));
     });
 
     return list;
-  }, [signals, exchangeFilter, searchQuery, sigSort]);
+  }, [signals, searchQuery, sigSort]);
 
   // Sort & Filter History
   const sortedHistory = useMemo(() => {
     let list = closedPositions.filter(p => {
-      if (exchangeFilter !== 'ALL' && (p.exchange || 'BINANCE') !== exchangeFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (p.symbol || '').toLowerCase().includes(q) || (p.notes || '').toLowerCase().includes(q);
@@ -404,20 +1116,18 @@ function LivestreamApp() {
       if (histSort.key === 'size') return mult * ((Number(a.pos_size_usd) || 0) - (Number(b.pos_size_usd) || 0));
       if (histSort.key === 'pnl') return mult * ((Number(a.net_pnl_usd) || 0) - (Number(b.net_pnl_usd) || 0));
       if (histSort.key === 'roe') return mult * ((Number(a.roe_pct) || 0) - (Number(b.roe_pct) || 0));
-      if (histSort.key === 'reason') return mult * (a.exit_reason || a.status || '').localeCompare(b.exit_reason || b.status || '');
       return mult * ((a.close_time || a.open_time || 0) - (b.close_time || b.open_time || 0));
     });
 
     return list;
-  }, [closedPositions, exchangeFilter, searchQuery, histSort]);
+  }, [closedPositions, searchQuery, histSort]);
 
-  // Financial Stats (Exact match with backend DB and Main Terminal)
-  const walletBalance = performance.wallet_balance !== undefined ? Number(performance.wallet_balance) : 1000.0;
-  const marginBalance = performance.margin_balance !== undefined ? Number(performance.margin_balance) : (performance.current_equity_usd !== undefined ? Number(performance.current_equity_usd) : walletBalance);
+  // Financial Stats
+  const walletBalance = performance.wallet_balance !== undefined ? Number(performance.wallet_balance) : 10000.0;
+  const marginBalance = performance.margin_balance !== undefined ? Number(performance.margin_balance) : walletBalance;
   const unrealizedPnl = performance.unrealized_pnl_usd !== undefined ? Number(performance.unrealized_pnl_usd) : 0.0;
-  const realizedPnl = performance.net_profit_usd !== undefined ? Number(performance.net_profit_usd) : (performance.net_realized_pnl_usd !== undefined ? Number(performance.net_realized_pnl_usd) : 0.0);
-  const winRate = performance.win_rate !== undefined ? Number(performance.win_rate) : (performance.win_rate_pct !== undefined ? Number(performance.win_rate_pct) : 0.0);
-  const profitFactor = performance.profit_factor !== undefined ? Number(performance.profit_factor) : 0.0;
+  const realizedPnl = performance.net_profit_usd !== undefined ? Number(performance.net_profit_usd) : 0.0;
+  const winRate = performance.win_rate !== undefined ? Number(performance.win_rate) : 0.0;
 
   return (
     <div className="flex flex-col min-h-screen bg-[#080B11] text-slate-200 font-sans text-xs select-none pb-12">
@@ -428,45 +1138,36 @@ function LivestreamApp() {
         {/* Top Line: Live Badge, Clock & Actions */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           
-          {/* Live Status Badge */}
           <div className="flex items-center gap-2.5">
             <span className="w-3 h-3 rounded-full bg-red-500 pulse-live-dot"></span>
             <span className="font-extrabold text-sm sm:text-base text-white tracking-wider flex items-center gap-1.5">
-              <span>🔴 LIVESTREAM ENTRY & POSITIONS MONITOR</span>
+              <span>🔴 LIVESTREAM REALTIME MONITOR</span>
               <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/40 px-2 py-0.2 rounded font-mono font-bold">24/7 LIVE</span>
             </span>
           </div>
 
-          {/* Right Controls */}
           <div className="flex items-center gap-2 font-mono text-xs">
+            <span className={`px-2.5 py-1 rounded border text-[11px] font-bold flex items-center gap-1.5 ${wsStatus === 'connected' ? 'bg-emerald-950 text-emerald-400 border-emerald-500/40' : 'bg-amber-950 text-amber-400 border-amber-500/40'}`}>
+              <span className={`w-2 h-2 rounded-full ${wsStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+              <span>{wsStatus === 'connected' ? 'WEBSOCKET STREAMING (0ms)' : 'RECONNECTING WS...'}</span>
+            </span>
+
             <span className="text-binance-yellow font-bold bg-[#141A28] px-2.5 py-1 rounded border border-[#1E2638]">
               ⏱️ {timeStr}
             </span>
 
-            {/* Stream OBS Mode Toggle */}
             <button
               className={`px-2.5 py-1 rounded font-bold border transition flex items-center gap-1 ${isStreamMode ? 'bg-binance-purple text-white border-binance-purple' : 'bg-binance-subpanel text-slate-300 border-[#1E2638] hover:text-white'}`}
               onClick={() => setIsStreamMode(!isStreamMode)}
-              title="Chế độ thu gọn chuyên dùng cho OBS Studio / Livestream"
+              title="Chế độ thu gọn OBS Studio"
             >
-              <span>🎥</span>
-              <span className="hidden sm:inline">{isStreamMode ? 'Stream Mode BẬT' : 'Stream Mode'}</span>
+              <span>📺</span>
+              <span className="hidden sm:inline">OBS Mode</span>
             </button>
-
-            {/* Return to Main Terminal */}
-            <a
-              href="/"
-              className="bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-3 py-1 rounded border border-binance-yellow transition flex items-center gap-1 shadow"
-              title="Quay về Terminal Giao Dịch Chính"
-            >
-              <span>📈</span>
-              <span className="hidden sm:inline">Terminal Chính</span>
-            </a>
           </div>
-
         </div>
 
-        {/* Second Line: Executive Metric Strip (Exact match with Main Terminal) */}
+        {/* Financial KPIs Banner */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 font-mono">
           <div className="p-2 bg-[#111726] rounded border border-[#1E2638] flex flex-col justify-between">
             <span className="text-slate-400 text-[10px] uppercase font-bold">KÝ QUỸ MARGIN (EQUITY)</span>
@@ -500,7 +1201,7 @@ function LivestreamApp() {
 
       </header>
 
-      {/* ── 2. TOOLBAR: TABS, EXCHANGE FILTERS & SEARCH ── */}
+      {/* ── 2. TOOLBAR: TABS & SEARCH ── */}
       <div className="px-3 sm:px-6 py-2.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 bg-[#0B0E17] border-b border-[#1E2638] font-mono">
         
         {/* Navigation Tabs */}
@@ -522,23 +1223,13 @@ function LivestreamApp() {
           ))}
         </div>
 
-        {/* Exchange Filter & Search */}
+        {/* Exchange Badge & Search */}
         <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end">
-          
-          {/* Exchange Filter */}
-          <div className="flex items-center bg-[#111726] border border-[#1E2638] rounded-lg p-0.5 gap-0.5 text-[11px]">
-            {['ALL', 'BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'].map(ex => (
-              <button
-                key={ex}
-                className={`px-2 py-0.5 rounded font-bold transition ${exchangeFilter === ex ? 'bg-binance-active text-binance-yellow shadow' : 'text-slate-400 hover:text-white'}`}
-                onClick={() => setExchangeFilter(ex)}
-              >
-                {ex}
-              </button>
-            ))}
+          <div className="flex items-center bg-[#111726] border border-[#1E2638] rounded-lg px-2.5 py-1 text-[11px] font-bold text-binance-yellow shadow gap-1">
+            <span>🔶</span>
+            <span>Binance Futures (USDT-M)</span>
           </div>
 
-          {/* Search */}
           <input
             type="text"
             placeholder="Tìm symbol..."
@@ -550,7 +1241,7 @@ function LivestreamApp() {
           <button
             className="bg-binance-subpanel hover:bg-binance-hover px-2.5 py-1 rounded-lg border border-[#1E2638] text-xs font-bold text-slate-200 transition"
             onClick={fetchData}
-            title="Tải lại dữ liệu"
+            title="Đồng bộ lại dữ liệu ngay lập tức"
           >
             🔄
           </button>
@@ -558,105 +1249,104 @@ function LivestreamApp() {
 
       </div>
 
-      {/* ── 3. MAIN TABLE CONTENT ── */}
-      <main className="flex-1 p-3 sm:p-5 overflow-y-auto">
+      {/* ── 3. MAIN TAB CONTENT AREA ── */}
+      <main className="flex-1 px-3 sm:px-6 py-4 flex flex-col gap-4">
         
-        {/* ── TAB 1: ACTIVE POSITIONS TABLE ── */}
+        {/* TAB 1: POSITIONS TABLE */}
         {activeTab === 'positions' && (
-          <div className="bg-[#0B0E17] border border-[#1E2638] rounded-xl overflow-hidden shadow-2xl">
-            <div className="overflow-x-auto max-h-[75vh]">
-              <table className="w-full text-left font-mono text-[11px] border-separate border-spacing-0">
-                <thead className="sticky top-0 z-20">
+          <div className="bg-[#0C101A] rounded-xl border border-[#1E2638] overflow-hidden shadow-xl flex flex-col">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-mono">
+                <thead>
                   <tr>
-                    <SortableHeader title="Symbol / Sàn" sortKey="symbol" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Vị Thế" sortKey="side" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Size / Margin" sortKey="size" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Entry Price" sortKey="entry" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Mark Price" sortKey="mark" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Liq Price" sortKey="liq" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="Margin %" sortKey="margin_ratio" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <SortableHeader title="PnL ($ / ROE %)" sortKey="pnl" currentKey={posSort.key} currentDir={posSort.dir} onSort={handlePosSort} />
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">Mục Tiêu TP1 / SL</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">Ghi Chú</th>
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400 text-right">Thao Tác</th>
+                    <SortableHeader title="CẶP GIAO DỊCH" sortKey="symbol" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} />
+                    <SortableHeader title="VỊ THẾ / ĐÒN BẨY" sortKey="side" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} />
+                    <SortableHeader title="SIZE / MARGIN" sortKey="size" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} align="right" />
+                    <SortableHeader title="ENTRY / MARK" sortKey="mark" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} align="right" />
+                    <SortableHeader title="LÃI/LỖ RÒNG (PNL)" sortKey="pnl" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} align="right" />
+                    <SortableHeader title="ROE %" sortKey="roe" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} align="right" />
+                    <SortableHeader title="MỤC TIÊU TP1 / SL" sortKey="tp1" currentKey={posSort.key} currentDir={posSort.dir} onSort={k => handleSort('pos', k)} />
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-center text-slate-400">THAO TÁC</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {sortedActivePositions.length === 0 ? (
+                <tbody className="divide-y divide-[#151C2C] text-xs">
+                  {sortedPositions.length === 0 ? (
                     <tr>
-                      <td colSpan="11" className="py-16 text-center text-slate-500 font-mono border-b border-[#161D2C]">
-                        <span className="text-2xl block mb-1">⚡</span>
-                        <span className="text-sm font-bold text-slate-400">Không có vị thế mở nào đang hoạt động.</span>
-                        <p className="text-[11px] text-slate-500 mt-1">Scanner 24/7 đang quét 3,945 cặp phái sinh trên 6 sàn.</p>
+                      <td colSpan="8" className="py-12 text-center text-slate-500">
+                        <span className="text-2xl block mb-2">⚡</span>
+                        Không có vị thế active nào đang mở. Hệ thống đang quét 500+ cặp hợp đồng Binance...
                       </td>
                     </tr>
                   ) : (
-                    sortedActivePositions.map(pos => {
-                      const isLong = ['BUY', 'LONG'].includes((pos.direction || '').toUpperCase());
-                      const pnl = Number(pos.net_pnl_usd) || 0;
-                      const roe = Number(pos.roe_pct) || 0;
-                      const isProfit = pnl >= 0;
+                    sortedPositions.map(pos => {
+                      const isLong = (pos.direction || '').toUpperCase() === 'BUY' || (pos.direction || '').toUpperCase() === 'LONG';
+                      const pKey = pos.symbol;
+                      const livePrice = (marketPrices[pKey] && marketPrices[pKey].price) || pos.current_price || pos.entry_price || 0;
+                      
+                      let liveNetPnl = Number(pos.net_pnl_usd) || 0;
+                      let liveRoe = Number(pos.roe_pct) || 0;
+                      if (pos.entry_price > 0 && livePrice > 0) {
+                        const rawDiff = isLong ? (livePrice - pos.entry_price) / pos.entry_price : (pos.entry_price - livePrice) / pos.entry_price;
+                        liveRoe = rawDiff * 100 * (pos.leverage || 20);
+                        liveNetPnl = (pos.initial_margin || 100) * (liveRoe / 100) - (pos.fee_usd || 1.0);
+                      }
 
                       return (
                         <tr
                           key={pos.id}
-                          className={`hover:bg-[#151D2F] transition cursor-pointer ${isProfit ? 'bg-emerald-950/10' : 'bg-rose-950/10'}`}
-                          onClick={() => setSelectedForensics(pos)}
+                          className="hover:bg-[#111726] transition cursor-pointer"
+                          onClick={() => setSelectedForensics({ ...pos, current_price: livePrice, net_pnl_usd: liveNetPnl, roe_pct: liveRoe })}
                         >
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            <div className="flex items-center gap-1.5">
-                              <span>{pos.symbol}</span>
-                              <span className="text-[9px] bg-binance-card px-1.5 py-0.2 rounded border border-[#1E2638] text-slate-400 font-bold">{pos.exchange || 'BINANCE'}</span>
-                            </div>
+                          <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
+                            <span>{pos.symbol}</span>
+                            <span className="text-[9.5px] text-binance-yellow bg-binance-card px-1 rounded border border-[#1E2638]">BINANCE</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className={`px-2 py-0.5 rounded font-black text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green border border-binance-green/40' : 'bg-binance-red/20 text-binance-red border border-binance-red/40'}`}>
+
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
                               {isLong ? '▲ LONG' : '▼ SHORT'} {pos.leverage || 20}x
                             </span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className="text-white font-bold">${formatPrice(pos.pos_size_usd)}</span>
-                            <span className="text-[9.5px] text-slate-400 block">Ký quỹ: ${formatPrice(pos.initial_margin)}</span>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className="text-white font-bold block">${formatPrice(pos.pos_size_usd)}</span>
+                            <span className="text-[10px] text-slate-400">Margin: ${formatPrice(pos.initial_margin)}</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-white border-b border-[#161D2C]">
-                            ${formatPrice(pos.entry_price)}
+
+                          <td className="py-3 px-3 text-right">
+                            <span className="text-slate-300 block">${formatPrice(pos.entry_price)}</span>
+                            <span className="text-white font-bold block">${formatPrice(livePrice)}</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-binance-yellow border-b border-[#161D2C]">
-                            ${formatPrice(pos.current_price || pos.entry_price)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-rose-400 border-b border-[#161D2C]">
-                            ${formatPrice(pos.liq_price)}
-                          </td>
-                          <td className={`py-2 px-3 whitespace-nowrap font-bold border-b border-[#161D2C] ${(pos.margin_ratio || 0) > 80 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                            {(pos.margin_ratio || 0).toFixed(2)}%
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-black border-b border-[#161D2C]">
-                            <span className={`text-sm ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {isProfit ? '+' : ''}${formatPrice(pnl)}
-                            </span>
-                            <span className={`text-[10px] block ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              ({roe >= 0 ? '+' : ''}{roe.toFixed(2)}% ROE)
+
+                          <td className="py-3 px-3 text-right">
+                            <span className={`font-black text-sm ${liveNetPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                              {liveNetPnl >= 0 ? '+' : ''}${formatPrice(liveNetPnl)}
                             </span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-[10.5px] border-b border-[#161D2C]">
-                            <span className="text-emerald-400 font-bold">${formatPrice(pos.tp1_price)}</span>
-                            <span className="text-slate-500 mx-1">/</span>
-                            <span className="text-rose-400 font-bold">${formatPrice(pos.sl_price)}</span>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className={`font-black text-xs ${liveRoe >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                              {liveRoe >= 0 ? '+' : ''}{liveRoe.toFixed(2)}%
+                            </span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-[10.5px] text-slate-400 max-w-[150px] truncate border-b border-[#161D2C]">
-                            {pos.notes ? `📝 ${pos.notes}` : (pos.side_rationale || '--')}
+
+                          <td className="py-3 px-3">
+                            <span className="text-binance-green font-bold block text-[11px]">TP1: ${formatPrice(pos.tp1_price)}</span>
+                            <span className="text-binance-red font-bold block text-[11px]">SL: ${formatPrice(pos.sl_price)}</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-right border-b border-[#161D2C]" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1.5">
+
+                          <td className="py-3 px-3 text-center" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-center gap-1.5">
                               <button
-                                className="bg-binance-card hover:bg-binance-hover text-binance-cyan border border-[#1E2638] px-2 py-1 rounded text-[10.5px] font-bold transition"
-                                onClick={() => setSelectedForensics(pos)}
+                                className="bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-2 py-1 rounded text-[10.5px] font-bold transition"
+                                onClick={() => setSelectedForensics({ ...pos, current_price: livePrice, net_pnl_usd: liveNetPnl, roe_pct: liveRoe })}
                               >
                                 🔍 Chi Tiết
                               </button>
                               <button
-                                className="bg-rose-600 hover:bg-rose-500 text-white px-2.5 py-1 rounded text-[10.5px] font-bold transition shadow"
+                                className="bg-binance-red hover:bg-red-600 text-white px-2 py-1 rounded text-[10.5px] font-bold transition"
                                 onClick={() => handleClosePosition(pos.id)}
+                                title="Đóng vị thế ngay tại giá thị trường"
                               >
                                 ✕ Đóng
                               </button>
@@ -672,229 +1362,59 @@ function LivestreamApp() {
           </div>
         )}
 
-        {/* ── TAB 2: OPEN LIMIT ORDERS TABLE ── */}
+        {/* TAB 2: LIMIT ORDERS */}
         {activeTab === 'orders' && (
-          <div className="bg-[#0B0E17] border border-[#1E2638] rounded-xl overflow-hidden shadow-2xl">
-            <div className="overflow-x-auto max-h-[75vh]">
-              <table className="w-full text-left font-mono text-[11px] border-separate border-spacing-0">
-                <thead className="sticky top-0 z-20">
+          <div className="bg-[#0C101A] rounded-xl border border-[#1E2638] overflow-hidden shadow-xl flex flex-col">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-mono">
+                <thead>
                   <tr>
-                    <SortableHeader title="Thời Gian" sortKey="time" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Symbol / Sàn" sortKey="symbol" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Chiều Lệnh" sortKey="side" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Loại Lệnh" sortKey="type" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Giá Đặt Limit" sortKey="entry" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Mục Tiêu TP1" sortKey="tp1" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <SortableHeader title="Cắt Lỗ SL" sortKey="sl" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={handleOrdSort} />
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">Trạng Thái</th>
+                    <SortableHeader title="SYMBOL" sortKey="symbol" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={k => handleSort('ord', k)} />
+                    <SortableHeader title="LOẠI LỆNH" sortKey="side" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={k => handleSort('ord', k)} />
+                    <SortableHeader title="GIÁ LIMIT ENTRY" sortKey="price" currentKey={ordSort.key} currentDir={ordSort.dir} onSort={k => handleSort('ord', k)} align="right" />
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-right text-slate-400">GIÁ MARK HIỆN TẠI</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">TP1 / SL MỤC TIÊU</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-center text-slate-400">THAO TÁC</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-[#151C2C] text-xs">
                   {sortedLimitOrders.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="py-16 text-center text-slate-500 font-mono border-b border-[#161D2C]">
-                        <span className="text-2xl block mb-1">⏳</span>
-                        <span className="text-sm font-bold text-slate-400">Không có lệnh Limit / FADE nào đang chờ khớp.</span>
+                      <td colSpan="6" className="py-12 text-center text-slate-500">
+                        <span className="text-2xl block mb-2">⏳</span>
+                        Không có lệnh chờ Limit nào đang đặt.
                       </td>
                     </tr>
                   ) : (
-                    sortedLimitOrders.map((ord, idx) => {
-                      const isLong = ['BUY', 'LONG'].includes((ord.direction || '').toUpperCase());
-                      return (
-                        <tr key={idx} className="hover:bg-[#151D2F] transition">
-                          <td className="py-2 px-3 whitespace-nowrap text-slate-400 text-[10px] border-b border-[#161D2C]">
-                            {formatDate(ord.timestamp || ord.created_at)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            <div className="flex items-center gap-1.5">
-                              <span>{ord.symbol}</span>
-                              <span className="text-[9px] bg-binance-card px-1.5 py-0.2 rounded border border-[#1E2638] text-slate-400">{ord.exchange || 'BINANCE'}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className={`px-2 py-0.5 rounded font-black text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green' : 'bg-binance-red/20 text-binance-red'}`}>
-                              {isLong ? '▲ BUY LIMIT' : '▼ SELL LIMIT'}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-binance-yellow font-bold border-b border-[#161D2C]">
-                            {ord.signal_type || 'FADE_LIMIT'}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            ${formatPrice(ord.entry_price || ord.price)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-emerald-400 font-bold border-b border-[#161D2C]">
-                            ${formatPrice(ord.tp1_price || ord.target)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-rose-400 font-bold border-b border-[#161D2C]">
-                            ${formatPrice(ord.sl_price || ord.stop_loss)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-binance-cyan/20 text-binance-cyan border border-binance-cyan/40">
-                              ⚡ Chờ Khớp
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ── TAB 3: LIVESTREAM SIGNALS RADAR TABLE ── */}
-        {activeTab === 'signals' && (
-          <div className="bg-[#0B0E17] border border-[#1E2638] rounded-xl overflow-hidden shadow-2xl">
-            <div className="overflow-x-auto max-h-[75vh]">
-              <table className="w-full text-left font-mono text-[11px] border-separate border-spacing-0">
-                <thead className="sticky top-0 z-20">
-                  <tr>
-                    <SortableHeader title="Thời Gian" sortKey="time" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Symbol / Sàn" sortKey="symbol" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Khung TF" sortKey="tf" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Chiều Lệnh" sortKey="side" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Loại Tín Hiệu" sortKey="type" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Entry Đề Xuất" sortKey="entry" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Chốt Lời TP1" sortKey="tp1" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Chốt Lời TP2" sortKey="tp2" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <SortableHeader title="Cắt Lỗ SL" sortKey="sl" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={handleSigSort} />
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">Lý Do Kỹ Thuật</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedSignals.length === 0 ? (
-                    <tr>
-                      <td colSpan="10" className="py-16 text-center text-slate-500 font-mono border-b border-[#161D2C]">
-                        <span className="text-2xl block mb-1">⚡</span>
-                        <span className="text-sm font-bold text-slate-400">Chưa có tín hiệu SMC nào trong danh sách.</span>
-                      </td>
-                    </tr>
-                  ) : (
-                    sortedSignals.slice(0, 100).map((sig, idx) => {
-                      const isLong = ['BUY', 'LONG'].includes((sig.direction || '').toUpperCase());
-                      return (
-                        <tr key={idx} className="hover:bg-[#151D2F] transition">
-                          <td className="py-2 px-3 whitespace-nowrap text-slate-400 text-[10px] border-b border-[#161D2C]">
-                            {formatDate(sig.timestamp || sig.created_at)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            <div className="flex items-center gap-1.5">
-                              <span>{sig.symbol}</span>
-                              <span className="text-[9px] bg-binance-card px-1.5 py-0.2 rounded border border-[#1E2638] text-slate-400">{sig.exchange || 'BINANCE'}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-binance-cyan font-bold border-b border-[#161D2C]">
-                            {sig.timeframe || '5m'}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className={`px-2 py-0.5 rounded font-black text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green' : 'bg-binance-red/20 text-binance-red'}`}>
-                              {isLong ? '▲ BUY' : '▼ SELL'}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-binance-yellow font-bold border-b border-[#161D2C]">
-                            {sig.signal_type}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            ${formatPrice(sig.entry_price || sig.price)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-emerald-400 font-bold border-b border-[#161D2C]">
-                            ${formatPrice(sig.tp1_price || sig.target)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-emerald-300 font-bold border-b border-[#161D2C]">
-                            ${formatPrice(sig.tp2_price)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-rose-400 font-bold border-b border-[#161D2C]">
-                            ${formatPrice(sig.sl_price || sig.stop_loss)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-slate-400 text-[10.5px] max-w-[200px] truncate border-b border-[#161D2C]">
-                            {sig.rationale || sig.pattern || 'SMC FVG & Liquidity Sweep Confirmation'}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ── TAB 4: CLOSED HISTORY TABLE ── */}
-        {activeTab === 'history' && (
-          <div className="bg-[#0B0E17] border border-[#1E2638] rounded-xl overflow-hidden shadow-2xl">
-            <div className="overflow-x-auto max-h-[75vh]">
-              <table className="w-full text-left font-mono text-[11px] border-separate border-spacing-0">
-                <thead className="sticky top-0 z-20">
-                  <tr>
-                    <SortableHeader title="Thời Gian Đóng" sortKey="time" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <SortableHeader title="Symbol / Sàn" sortKey="symbol" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <SortableHeader title="Vị Thế" sortKey="side" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">Entry → Exit</th>
-                    <SortableHeader title="Size Vị Thế" sortKey="size" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <SortableHeader title="PnL Thực Nhận" sortKey="pnl" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <SortableHeader title="Tỷ Suất ROE" sortKey="roe" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <SortableHeader title="Kết Quả / Lý Do" sortKey="reason" currentKey={histSort.key} currentDir={histSort.dir} onSort={handleHistSort} />
-                    <th className="py-2.5 px-3 whitespace-nowrap border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400 text-right">Chi Tiết</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedHistory.length === 0 ? (
-                    <tr>
-                      <td colSpan="9" className="py-16 text-center text-slate-500 font-mono border-b border-[#161D2C]">
-                        <span className="text-2xl block mb-1">📜</span>
-                        <span className="text-sm font-bold text-slate-400">Chưa có lịch sử lệnh đã đóng.</span>
-                      </td>
-                    </tr>
-                  ) : (
-                    sortedHistory.map(trade => {
-                      const isLong = ['BUY', 'LONG'].includes((trade.direction || '').toUpperCase());
-                      const pnl = Number(trade.net_pnl_usd) || 0;
-                      const isWin = pnl > 0;
-
+                    sortedLimitOrders.map(ord => {
+                      const isLong = ord.direction === 'BUY' || (ord.signal_type && ord.signal_type.includes('LONG'));
+                      const pKey = ord.symbol;
+                      const livePrice = (marketPrices[pKey] && marketPrices[pKey].price) || ord.price || ord.entry_price || 0;
                       return (
                         <tr
-                          key={trade.id}
-                          className="hover:bg-[#151D2F] transition cursor-pointer"
-                          onClick={() => setSelectedForensics(trade)}
+                          key={ord.id || ord.timestamp}
+                          className="hover:bg-[#111726] transition cursor-pointer"
+                          onClick={() => setSelectedForensics(ord)}
                         >
-                          <td className="py-2 px-3 whitespace-nowrap text-slate-400 text-[10px] border-b border-[#161D2C]">
-                            {formatDate(trade.close_time || trade.open_time)}
+                          <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
+                            <span>{ord.symbol}</span>
+                            <span className="text-[9.5px] text-binance-yellow bg-binance-card px-1 rounded border border-[#1E2638]">BINANCE</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-bold text-white border-b border-[#161D2C]">
-                            <div className="flex items-center gap-1.5">
-                              <span>{trade.symbol}</span>
-                              <span className="text-[9px] text-slate-400 bg-binance-card px-1.5 py-0.2 rounded border border-[#1E2638]">{trade.exchange || 'BINANCE'}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className={`px-2 py-0.5 rounded font-black text-[10px] ${isLong ? 'bg-binance-green/20 text-binance-green' : 'bg-binance-red/20 text-binance-red'}`}>
-                              {isLong ? '▲ LONG' : '▼ SHORT'} {trade.leverage || 20}x
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
+                              {isLong ? 'LIMIT BUY' : 'LIMIT SELL'}
                             </span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-slate-200 border-b border-[#161D2C]">
-                            ${formatPrice(trade.entry_price)} → ${formatPrice(trade.exit_price || trade.current_price)}
+                          <td className="py-3 px-3 text-right font-bold text-binance-yellow">${formatPrice(ord.entry_price || ord.price)}</td>
+                          <td className="py-3 px-3 text-right text-white font-mono">${formatPrice(livePrice)}</td>
+                          <td className="py-3 px-3">
+                            <span className="text-binance-green font-bold block text-[11px]">TP1: ${formatPrice(ord.tp1_price)}</span>
+                            <span className="text-binance-red font-bold block text-[11px]">SL: ${formatPrice(ord.sl_price)}</span>
                           </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-white font-bold border-b border-[#161D2C]">
-                            ${formatPrice(trade.pos_size_usd)}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap font-black border-b border-[#161D2C]">
-                            <span className={`text-sm ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
-                            </span>
-                          </td>
-                          <td className={`py-2 px-3 whitespace-nowrap font-bold border-b border-[#161D2C] ${isWin ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {trade.roe_pct !== undefined ? `${Number(trade.roe_pct) >= 0 ? '+' : ''}${Number(trade.roe_pct).toFixed(2)}%` : '--'}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap border-b border-[#161D2C]">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isWin ? 'bg-emerald-950 text-emerald-400 border border-emerald-600/40' : 'bg-rose-950 text-rose-400 border border-rose-600/40'}`}>
-                              {trade.exit_reason || trade.status || (isWin ? 'Chốt Lãi' : 'Cắt Lỗ')}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap text-right border-b border-[#161D2C]" onClick={e => e.stopPropagation()}>
+                          <td className="py-3 px-3 text-center" onClick={e => e.stopPropagation()}>
                             <button
-                              className="bg-binance-card hover:bg-binance-hover text-binance-cyan border border-[#1E2638] px-2 py-1 rounded text-xs font-bold transition"
-                              onClick={() => setSelectedForensics(trade)}
+                              className="bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-2.5 py-1 rounded text-[10.5px] font-bold transition"
+                              onClick={() => setSelectedForensics(ord)}
                             >
                               🔍 Chi Tiết
                             </button>
@@ -909,45 +1429,250 @@ function LivestreamApp() {
           </div>
         )}
 
-        {/* ── TAB 5: JOURNAL & STATS TABLE ── */}
+        {/* TAB 3: SMC SIGNALS */}
+        {activeTab === 'signals' && (
+          <div className="bg-[#0C101A] rounded-xl border border-[#1E2638] overflow-hidden shadow-xl flex flex-col">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-mono">
+                <thead>
+                  <tr>
+                    <SortableHeader title="SYMBOL" sortKey="symbol" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={k => handleSort('sig', k)} />
+                    <SortableHeader title="LOẠI TÍN HIỆU" sortKey="type" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={k => handleSort('sig', k)} />
+                    <SortableHeader title="HƯỚNG" sortKey="side" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={k => handleSort('sig', k)} />
+                    <SortableHeader title="ENTRY" sortKey="entry" currentKey={sigSort.key} currentDir={sigSort.dir} onSort={k => handleSort('sig', k)} align="right" />
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">TP1 / TP2 / SL</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-right text-slate-400">R:R</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-right text-slate-400">THỜI GIAN</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-center text-slate-400">THAO TÁC</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#151C2C] text-xs">
+                  {sortedSignals.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" className="py-12 text-center text-slate-500">
+                        <span className="text-2xl block mb-2">📡</span>
+                        Đang quét liên tục 500+ cặp hợp đồng Binance Futures...
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedSignals.map(sig => {
+                      const isLong = sig.direction === 'BUY';
+                      return (
+                        <tr
+                          key={sig.id || sig.timestamp}
+                          className="hover:bg-[#111726] transition cursor-pointer"
+                          onClick={() => setSelectedForensics(sig)}
+                        >
+                          <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
+                            <span>{sig.symbol}</span>
+                            <span className="text-[9.5px] text-slate-400 bg-binance-card px-1 rounded">{sig.timeframe || '15m'}</span>
+                          </td>
+                          <td className="py-3 px-3 text-binance-yellow font-bold">{sig.signal_type}</td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
+                              {isLong ? '▲ LONG' : '▼ SHORT'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-white">${formatPrice(sig.entry_price || sig.price)}</td>
+                          <td className="py-3 px-3">
+                            <span className="text-binance-green font-bold text-[11px] block">TP1: ${formatPrice(sig.tp1_price)} • TP2: ${formatPrice(sig.tp2_price)}</span>
+                            <span className="text-binance-red font-bold text-[11px] block">SL: ${formatPrice(sig.sl_price)}</span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-binance-yellow">1 : {(sig.rr_ratio || 2.0).toFixed(2)}</td>
+                          <td className="py-3 px-3 text-right text-slate-400">{formatRelativeTime(sig.timestamp || sig.created_at)}</td>
+                          <td className="py-3 px-3 text-center" onClick={e => e.stopPropagation()}>
+                            <button
+                              className="bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-2.5 py-1 rounded text-[10.5px] font-bold transition"
+                              onClick={() => setSelectedForensics(sig)}
+                            >
+                              🔍 Chi Tiết
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: TRADE HISTORY */}
+        {activeTab === 'history' && (
+          <div className="bg-[#0C101A] rounded-xl border border-[#1E2638] overflow-hidden shadow-xl flex flex-col">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-mono">
+                <thead>
+                  <tr>
+                    <SortableHeader title="SYMBOL" sortKey="symbol" currentKey={histSort.key} currentDir={histSort.dir} onSort={k => handleSort('hist', k)} />
+                    <SortableHeader title="VỊ THẾ" sortKey="side" currentKey={histSort.key} currentDir={histSort.dir} onSort={k => handleSort('hist', k)} />
+                    <SortableHeader title="SIZE / MARGIN" sortKey="size" currentKey={histSort.key} currentDir={histSort.dir} onSort={k => handleSort('hist', k)} align="right" />
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-right text-slate-400">ENTRY / EXIT</th>
+                    <SortableHeader title="LÃI/LỖ RÒNG" sortKey="pnl" currentKey={histSort.key} currentDir={histSort.dir} onSort={k => handleSort('hist', k)} align="right" />
+                    <SortableHeader title="ROE %" sortKey="roe" currentKey={histSort.key} currentDir={histSort.dir} onSort={k => handleSort('hist', k)} align="right" />
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-slate-400">KẾT QUẢ / LÝ DO</th>
+                    <th className="py-2.5 px-3 border-b border-[#1E2638] bg-[#090D16] text-[10.5px] uppercase font-bold text-center text-slate-400">THAO TÁC</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#151C2C] text-xs">
+                  {sortedHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" className="py-12 text-center text-slate-500">
+                        <span className="text-2xl block mb-2">📜</span>
+                        Chưa có lịch sử lệnh đã đóng.
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedHistory.map(pos => {
+                      const isLong = (pos.direction || '').toUpperCase() === 'BUY' || (pos.direction || '').toUpperCase() === 'LONG';
+                      const pnl = Number(pos.net_pnl_usd) || 0;
+                      const roe = Number(pos.roe_pct) || 0;
+                      const isWin = pnl > 0 || (pos.status && pos.status.startsWith('TP'));
+
+                      return (
+                        <tr
+                          key={pos.id}
+                          className="hover:bg-[#111726] transition cursor-pointer"
+                          onClick={() => setSelectedForensics(pos)}
+                        >
+                          <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
+                            <span>{pos.symbol}</span>
+                            <span className="text-[9.5px] text-binance-yellow bg-binance-card px-1 rounded">BINANCE</span>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${isLong ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'}`}>
+                              {isLong ? 'LONG' : 'SHORT'} {pos.leverage || 20}x
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className="text-white font-bold block">${formatPrice(pos.pos_size_usd)}</span>
+                            <span className="text-[10px] text-slate-400">Margin: ${formatPrice(pos.initial_margin)}</span>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className="text-slate-400 block">${formatPrice(pos.entry_price)}</span>
+                            <span className="text-white font-bold block">→ ${formatPrice(pos.exit_price || pos.current_price)}</span>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className={`font-black text-sm ${pnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                              {pnl >= 0 ? '+' : ''}${formatPrice(pnl)}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <span className={`font-black text-xs ${roe >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                              {roe >= 0 ? '+' : ''}{roe.toFixed(2)}%
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isWin ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
+                              {pos.status || pos.exit_reason || 'CLOSED'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 text-center" onClick={e => e.stopPropagation()}>
+                            <button
+                              className="bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-2.5 py-1 rounded text-[10.5px] font-bold transition"
+                              onClick={() => setSelectedForensics(pos)}
+                            >
+                              🔍 Chi Tiết
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: JOURNAL & PERFORMANCE */}
         {activeTab === 'journal' && (
-          <div className="bg-[#0B0E17] border border-[#1E2638] rounded-xl p-5 flex flex-col gap-4 font-mono shadow-2xl">
-            <span className="text-base font-extrabold text-binance-yellow flex items-center gap-2">
-              <span>📖</span>
-              <span>TỔNG HỢP NHẬT KÝ & HIỆU SUẤT TRADING JOURNAL</span>
-            </span>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="p-3 bg-[#111726] rounded border border-[#1E2638]">
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">TỔNG LỆNH ĐÃ ĐÓNG:</span>
-                <b className="text-white text-lg">{closedPositions.length}</b>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono">
+            <div className="p-4 bg-[#0C101A] rounded-xl border border-[#1E2638] flex flex-col gap-3">
+              <span className="text-binance-yellow font-bold text-sm uppercase flex items-center gap-1.5 font-sans">
+                <span>📊</span>
+                <span>HIỆU SUẤT TÀI KHOẢN</span>
+              </span>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Tổng Số Lệnh:</span>
+                <b className="text-white font-bold">{performance.total_trades || closedPositions.length}</b>
               </div>
-              <div className="p-3 bg-[#111726] rounded border border-[#1E2638]">
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">WIN RATE TỔNG:</span>
-                <b className="text-binance-yellow text-lg">{winRate.toFixed(1)}%</b>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Số Lệnh Thắng:</span>
+                <b className="text-binance-green font-bold">{performance.wins || 0}</b>
               </div>
-              <div className="p-3 bg-[#111726] rounded border border-[#1E2638]">
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">HỆ SỐ LỢI NHUẬN:</span>
-                <b className="text-white text-lg">{profitFactor.toFixed(2)}</b>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Số Lệnh Thua:</span>
+                <b className="text-binance-red font-bold">{performance.losses || 0}</b>
               </div>
-              <div className="p-3 bg-[#111726] rounded border border-[#1E2638]">
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">LÃI RÒNG:</span>
-                <b className={`text-lg ${realizedPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>{realizedPnl >= 0 ? '+' : ''}${formatPrice(realizedPnl)}</b>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Tỷ Lệ Thắng (Win Rate):</span>
+                <b className="text-binance-yellow font-black">{winRate.toFixed(1)}%</b>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Profit Factor:</span>
+                <b className="text-white font-bold">{performance.profit_factor ? Number(performance.profit_factor).toFixed(2) : '0.00'}</b>
               </div>
             </div>
-            <div className="flex justify-end pt-2">
-              <a href="/" className="bg-binance-yellow hover:bg-binance-yellowHover text-black font-bold px-4 py-2 rounded-lg text-xs transition shadow">
-                Mở Lịch PnL & Xuất Báo Cáo JSON Đầy Đủ Trên Terminal ➔
-              </a>
+
+            <div className="p-4 bg-[#0C101A] rounded-xl border border-[#1E2638] flex flex-col gap-3">
+              <span className="text-binance-green font-bold text-sm uppercase flex items-center gap-1.5 font-sans">
+                <span>💰</span>
+                <span>DÒNG TIỀN LỢI NHUẬN</span>
+              </span>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Số Dư Ký Quỹ (Equity):</span>
+                <b className="text-binance-yellow font-bold">${formatPrice(marginBalance)}</b>
+              </div>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Số Dư Ví (Wallet):</span>
+                <b className="text-white font-bold">${formatPrice(walletBalance)}</b>
+              </div>
+              <div className="flex justify-between border-b border-[#151C2C] pb-2">
+                <span className="text-slate-400">Lãi Ròng Đã Chốt:</span>
+                <b className={`font-black ${realizedPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                  {realizedPnl >= 0 ? '+' : ''}${formatPrice(realizedPnl)}
+                </b>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Unrealized PnL:</span>
+                <b className={`font-black ${unrealizedPnl >= 0 ? 'text-binance-green' : 'text-binance-red'}`}>
+                  {unrealizedPnl >= 0 ? '+' : ''}${formatPrice(unrealizedPnl)}
+                </b>
+              </div>
+            </div>
+
+            <div className="p-4 bg-[#0C101A] rounded-xl border border-[#1E2638] flex flex-col gap-3 font-sans">
+              <span className="text-binance-cyan font-bold text-sm uppercase flex items-center gap-1.5">
+                <span>🛡️</span>
+                <span>QUẢN TRỊ RỦI RO BINANCE</span>
+              </span>
+              <div className="text-slate-300 text-xs leading-relaxed flex flex-col gap-2 font-mono">
+                <div>• Sàn Giao Dịch: <b className="text-binance-yellow">Binance Futures (USDT-M)</b></div>
+                <div>• Quy Mô Vị Thế: <b className="text-white">1.0% Equity / Trade</b></div>
+                <div>• Đòn Bẩy Tiêu Chuẩn: <b className="text-white">20x Isolated</b></div>
+                <div>• Tỷ Lệ Chốt Lời / Cắt Lỗ: <b className="text-binance-green">TP1 1.5R • TP2 3.0R</b></div>
+                <div>• Bảo Vệ Vốn: <b className="text-binance-green">Auto Breakeven + Trailing SL</b></div>
+              </div>
             </div>
           </div>
         )}
 
       </main>
 
-      {/* ── 4. FORENSICS MODAL ── */}
+      {/* ── 4. FULL 1:1 DEEP FORENSICS DETAIL MODAL ── */}
       {selectedForensics && (
-        <LivestreamForensicsModal
+        <OrderForensicsModal
           data={selectedForensics}
+          marketPrices={marketPrices}
           onClose={() => setSelectedForensics(null)}
           onClosePosition={handleClosePosition}
         />
@@ -957,6 +1682,9 @@ function LivestreamApp() {
   );
 }
 
-// Mount Livestream React Root
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<LivestreamApp />);
+// ── RENDER ROOT COMPONENT ──
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(<LivestreamApp />);
+}

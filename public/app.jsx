@@ -2893,16 +2893,9 @@ function TradingJournalModal({ onClose, onOpenForensics, onSelectSymbol }) {
         <div className="flex items-center gap-2 font-mono">
           
           {/* Exchange Filter Tabs */}
-          <div className="hidden sm:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 text-[10px]">
-            {['ALL', 'BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'].map(ex => (
-              <button
-                key={ex}
-                className={`px-2 py-0.5 rounded font-bold transition ${exchangeFilter === ex ? 'bg-binance-yellow text-black shadow' : 'text-slate-400 hover:text-white'}`}
-                onClick={() => setExchangeFilter(ex)}
-              >
-                {ex}
-              </button>
-            ))}
+          <div className="hidden sm:flex items-center bg-binance-bg border border-binance-border rounded px-2 py-0.5 text-[10px] font-bold text-binance-yellow shadow gap-1">
+            <span>🔶</span>
+            <span>Binance Futures (USDT-M)</span>
           </div>
 
           {/* Export JSON Button */}
@@ -3793,54 +3786,28 @@ function SetupWizardModal({ isOpen, onClose, onCompleted }) {
             </div>
           )}
 
-          {/* ── BƯỚC 3: LỰA CHỌN DANH SÁCH 6 SÀN ── */}
+          {/* ── BƯỚC 3: SÀN GIAO DỊCH BINANCE FUTURES ── */}
           {step === 3 && (
             <div className="flex flex-col gap-4">
               <div className="p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3">
-                <span className="text-2xl">🌐</span>
+                <span className="text-2xl">🔶</span>
                 <div>
-                  <b className="text-white text-sm block mb-1">Lựa Chọn & Kích Hoạt Danh Sách Sàn Giao Dịch Phái Sinh</b>
+                  <b className="text-white text-sm block mb-1">Môi Trường Giao Dịch: Binance Futures (USDT-M)</b>
                   <p className="text-slate-400 text-[11px] leading-relaxed">
-                    Bật/Tắt các sàn giao dịch mong muốn. Hệ thống sẽ tự động quét, lọc thanh khoản và nạp <b>top 90% hợp đồng USDT Perpetual</b> của các sàn được chọn.
+                    Hệ thống hoạt động chuyên biệt và tối ưu hóa 100% cho <b>Binance Futures</b>. Tự động kết nối WebSocket Live Price và quét hơn <b>500+ cặp hợp đồng vĩnh cửu</b> 24/7.
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                {[
-                  { id: 'BINANCE', name: 'Binance Futures', icon: '🔶', approx: '~631 Perps', desc: 'USDT-M Perpetual' },
-                  { id: 'BYBIT', name: 'Bybit Linear', icon: '⬛', approx: '~655 Perps', desc: 'Linear V5 Perpetual' },
-                  { id: 'OKX', name: 'OKX Perpetual', icon: '🔷', approx: '~394 Perps', desc: 'USDT Perpetual Swap' },
-                  { id: 'BITGET', name: 'Bitget Perpetual', icon: '🔵', approx: '~684 Perps', desc: 'USDT-M Perpetual' },
-                  { id: 'GATE', name: 'Gate.io Perpetual', icon: '🚪', approx: '~843 Perps', desc: 'USDT Perpetual' },
-                  { id: 'BINGX', name: 'BingX Perpetual', icon: '💠', approx: '~738 Perps', desc: 'Swap Perpetual' }
-                ].map(ex => {
-                  const isChecked = !!enabledExchanges[ex.id];
-                  return (
-                    <div
-                      key={ex.id}
-                      onClick={() => toggleExchange(ex.id)}
-                      className={`p-3 rounded-lg border cursor-pointer transition flex flex-col justify-between gap-2 ${isChecked ? 'bg-[#111726] border-binance-yellow shadow-md shadow-binance-yellow/10' : 'bg-[#090D16] border-binance-border opacity-50'}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-white flex items-center gap-1.5">
-                          <span>{ex.icon}</span>
-                          <span>{ex.name}</span>
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {}}
-                          className="w-4 h-4 accent-binance-yellow cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <span className="text-binance-yellow font-bold text-[11px] block">{ex.approx}</span>
-                        <span className="text-slate-400 text-[10px]">{ex.desc}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="p-4 rounded-lg border border-binance-yellow bg-[#111726] shadow-md flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl">🔶</span>
+                  <div>
+                    <span className="font-extrabold text-white text-base block">Binance Futures (USDT-M Perpetual)</span>
+                    <span className="text-slate-400 text-xs">500+ Liquid Pairs • WebSocket Live Streams • VIP Fee Schedules</span>
+                  </div>
+                </div>
+                <span className="bg-binance-yellow text-black font-black text-xs px-3 py-1 rounded">ĐANG HOẠT ĐỘNG</span>
               </div>
 
               <div className="p-3 bg-[#111726] rounded-lg border border-binance-border flex items-center justify-between">
@@ -3852,11 +3819,11 @@ function SetupWizardModal({ isOpen, onClose, onCompleted }) {
                     className="w-4 h-4 accent-binance-yellow rounded cursor-pointer"
                   />
                   <div>
-                    <b className="text-white">Tự động nạp 90% symbol perpetual qua CCXT Pro sau khi hoàn tất</b>
+                    <b className="text-white">Tự động nạp 90% symbol Binance Futures qua CCXT Pro sau khi hoàn tất</b>
                     <span className="text-slate-400 text-[10px] block">Lọc danh sách hợp đồng theo khối lượng thanh khoản 24h thực tế.</span>
                   </div>
                 </label>
-                <span className="text-binance-cyan font-bold text-xs">{activeExchangesList.length} / 6 Sàn Đã Bật</span>
+                <span className="text-binance-cyan font-bold text-xs">Binance Active</span>
               </div>
             </div>
           )}
@@ -3957,12 +3924,12 @@ function SetupWizardModal({ isOpen, onClose, onCompleted }) {
 
 // ── ROOT APPLICATION COMPONENT ──
 function App() {
-  const [selectedExchange, setSelectedExchange] = useState('ALL');
+  const [selectedExchange, setSelectedExchange] = useState('BINANCE');
   const [bottomTab, setBottomTab] = useState('signals');
   const [isDeskCollapsed, setIsDeskCollapsed] = useState(false);
 
   // Left Market Watchlist state
-  const [leftExchangeTab, setLeftExchangeTab] = useState('ALL');
+  const [leftExchangeTab, setLeftExchangeTab] = useState('BINANCE');
   const [leftCategoryFilter, setLeftCategoryFilter] = useState('ALL'); // ALL, SIGNALS, GAINERS, LOSERS
   const [watchlistSearch, setWatchlistSearch] = useState('');
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
@@ -4265,25 +4232,11 @@ function App() {
               <span className="sm:hidden font-black">STAT2</span>
             </div>
 
-            {/* Desktop & Tablet Exchange Filter Tabs */}
-            <div className="hidden md:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 overflow-x-auto">
-              {[
-                { id: 'ALL', label: `🌐 ALL (${countAll})` },
-                { id: 'BINANCE', label: `🔶 Binance (${countBinance})` },
-                { id: 'BYBIT', label: `⬛ Bybit (${countBybit})` },
-                { id: 'OKX', label: `🔷 OKX (${countOkx})` },
-                { id: 'BITGET', label: `🔵 Bitget (${countBitget})` },
-                { id: 'GATE', label: `🚪 Gate (${countGate})` },
-                { id: 'BINGX', label: `💠 BingX (${countBingx})` }
-              ].map(tab => (
-                <button
-                  key={tab.id}
-                  className={`px-2 py-0.5 rounded text-[10.5px] font-bold transition whitespace-nowrap ${selectedExchange === tab.id ? 'bg-binance-active text-binance-yellow shadow' : 'text-binance-textSec hover:text-white'}`}
-                  onClick={() => setSelectedExchange(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            {/* Desktop & Tablet Exchange Badge */}
+            <div className="hidden md:flex items-center bg-binance-bg border border-binance-border rounded px-2 py-0.5 gap-1 text-[11px] font-bold text-binance-yellow shadow">
+              <span>🔶</span>
+              <span>Binance Futures (USDT-M)</span>
+              <span className="bg-binance-active px-1.5 py-0.2 rounded text-[10px] text-white font-mono">{countBinance || countAll} Pairs</span>
             </div>
           </div>
 
@@ -4394,26 +4347,13 @@ function App() {
                 </button>
               </div>
 
-              {/* Primary Exchange Tabs for Left Explorer */}
-              <div className="grid grid-cols-4 sm:grid-cols-7 gap-1 font-mono text-[10px]">
-                {[
-                  { id: 'ALL', label: '🌐 ALL' },
-                  { id: 'BINANCE', label: '🔶 BNC' },
-                  { id: 'BYBIT', label: '⬛ BYB' },
-                  { id: 'OKX', label: '🔷 OKX' },
-                  { id: 'BITGET', label: '🔵 BGT' },
-                  { id: 'GATE', label: '🚪 GATE' },
-                  { id: 'BINGX', label: '💠 BGX' }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    className={`py-1 rounded font-bold transition text-center border truncate ${leftExchangeTab === tab.id ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-card text-binance-textSec border-binance-border hover:text-white'}`}
-                    onClick={() => setLeftExchangeTab(tab.id)}
-                    title={`Lọc cặp giao dịch sàn ${tab.id}`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+              {/* Primary Exchange Badge for Left Explorer */}
+              <div className="flex items-center justify-between bg-binance-card border border-binance-border rounded px-2 py-1 text-[10.5px] font-bold text-binance-yellow font-mono">
+                <span className="flex items-center gap-1">
+                  <span>🔶</span>
+                  <span>Binance Futures (USDT-M)</span>
+                </span>
+                <span className="text-[9.5px] text-slate-400 font-normal">24/7 Live</span>
               </div>
 
               {/* Search Bar */}

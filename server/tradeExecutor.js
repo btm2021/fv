@@ -7,6 +7,7 @@
 const DB = require('./db');
 const exchangeManager = require('./exchanges');
 const logger = require('./logger');
+const notification = require('./notification');
 
 class TradeExecutor {
   constructor() {
@@ -80,9 +81,13 @@ class TradeExecutor {
       return null;
     }
 
+    const orderType = (signal.order_type || (strat && strat.order_type ? strat.order_type : 'MARKET')).toUpperCase();
+    const isLimit = orderType === 'LIMIT';
+    const entryFeeRate = isLimit ? (exAdapter.makerFeeRate || 0.0002) : (exAdapter.takerFeeRate || 0.0005);
+
     const notionalSizeUsd = initialMargin * leverage;
     const quantity = notionalSizeUsd / signal.entry_price;
-    const entryFee = notionalSizeUsd * takerFeeRate;
+    const entryFee = notionalSizeUsd * entryFeeRate;
     const maintenanceMargin = notionalSizeUsd * mmrRate;
 
     // ── ESTIMATED LIQUIDATION PRICE FORMULA ──
@@ -168,15 +173,15 @@ class TradeExecutor {
         if (isLiquidated) {
           const exitFee = pos.pos_size_usd * takerFeeRate;
           const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = -(pos.initial_margin || (pos.pos_size_usd / pos.leverage));
+          const netPnlUsd = -pos.initial_margin;
 
           updates.status = 'LIQ_HIT';
           updates.is_liquidated = 1;
           updates.close_time = now;
           updates.duration_seconds = durationSec;
-          updates.exit_price = currentPrice;
+          updates.exit_price = pos.liq_price;
           updates.exit_reason = 'LIQUIDATED';
-          updates.gross_pnl_usd = netPnlUsd;
+          updates.gross_pnl_usd = -pos.initial_margin;
           updates.fee_usd = totalFee;
           updates.exit_fee = exitFee;
           updates.net_pnl_usd = netPnlUsd;
@@ -185,32 +190,21 @@ class TradeExecutor {
           updates.margin_ratio = 100.0;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('LIQ_HIT', `💀 [LIQUIDATION HIT] [${exchangeId}] ${pos.symbol} liquidated at ${currentPrice}. Loss: -$${pos.initial_margin.toFixed(2)} USD (-100% ROE)`);
+          logger.trade('LIQ_HIT', `💀 [LIQUIDATION] [BINANCE] ${pos.symbol} liquidated at ${pos.liq_price}. Loss: -$${pos.initial_margin.toFixed(2)} USD (-100% ROE)`);
           continue;
         }
 
-        // ── 2. TP1 HIT CHECK (Move SL to Breakeven + 0.05%) ──
-        if (!pos.is_tp1_hit) {
-          const isTp1Reached = isLong ? (currentPrice >= pos.tp1_price) : (currentPrice <= pos.tp1_price);
-          if (isTp1Reached) {
-            updates.is_tp1_hit = 1;
-            updates.is_be_moved = 1;
-            const beSl = isLong ? pos.entry_price * 1.0005 : pos.entry_price * 0.9995;
-            updates.sl_price = beSl;
-            logger.trade('TP_HIT', `🎯 [TP1 TRIGGERED] [${exchangeId}] ${pos.symbol} touched TP1 (${pos.tp1_price}). Trailing SL moved to BE (${beSl.toFixed(4)})!`);
-          }
-        }
-
-        // ── 3. TP2 HIT CHECK (Full profit with Maker Fee) ──
+        // ── 2. TAKE PROFIT 2 HIT CHECK (Full 3.0R Target) ──
         const isTp2Reached = isLong ? (currentPrice >= pos.tp2_price) : (currentPrice <= pos.tp2_price);
         if (isTp2Reached) {
           const grossPnlUsd = isLong ? (pos.quantity * (pos.tp2_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp2_price));
           const exitFee = pos.pos_size_usd * makerFeeRate;
           const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = grossPnlUsd - totalFee;
+          const netPnlUsd = Math.max(0.01, grossPnlUsd - totalFee);
           const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
           updates.status = 'TP2_HIT';
+          updates.is_tp1_hit = 1;
           updates.close_time = now;
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.tp2_price;
@@ -223,7 +217,34 @@ class TradeExecutor {
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] [${exchangeId}] ${pos.symbol} closed at TP2 (${pos.tp2_price}). Realized: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
+          logger.trade('WIN_CLOSE', `🏆 [TP2 WIN] [BINANCE] ${pos.symbol} closed at TP2 (${pos.tp2_price}). Realized: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
+          continue;
+        }
+
+        // ── 3. TAKE PROFIT 1 HIT CHECK (1.5R Target) ──
+        const isTp1Reached = isLong ? (currentPrice >= pos.tp1_price) : (currentPrice <= pos.tp1_price);
+        if (isTp1Reached) {
+          const grossPnlUsd = isLong ? (pos.quantity * (pos.tp1_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.tp1_price));
+          const exitFee = pos.pos_size_usd * takerFeeRate;
+          const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
+          const netPnlUsd = Math.max(0.01, grossPnlUsd - totalFee);
+          const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
+
+          updates.status = 'TP1_HIT';
+          updates.is_tp1_hit = 1;
+          updates.close_time = now;
+          updates.duration_seconds = durationSec;
+          updates.exit_price = pos.tp1_price;
+          updates.exit_reason = 'TP1_HIT';
+          updates.gross_pnl_usd = grossPnlUsd;
+          updates.fee_usd = totalFee;
+          updates.exit_fee = exitFee;
+          updates.net_pnl_usd = netPnlUsd;
+          updates.net_pnl_pct = (netPnlUsd / pos.pos_size_usd) * 100.0;
+          updates.roe_pct = roePct;
+
+          await DB.updatePosition(pos.id, updates);
+          logger.trade('WIN_CLOSE', `🏆 [TP1 WIN] [BINANCE] ${pos.symbol} closed at TP1 (${pos.tp1_price}). Realized: +$${netPnlUsd.toFixed(2)} USD (+${roePct.toFixed(2)}% ROE)!`);
           continue;
         }
 
@@ -233,15 +254,16 @@ class TradeExecutor {
           const grossPnlUsd = isLong ? (pos.quantity * (pos.sl_price - pos.entry_price)) : (pos.quantity * (pos.entry_price - pos.sl_price));
           const exitFee = pos.pos_size_usd * takerFeeRate;
           const totalFee = (pos.entry_fee || pos.fee_usd || 0) + exitFee;
-          const netPnlUsd = grossPnlUsd - totalFee;
+          const rawNetPnlUsd = grossPnlUsd - totalFee;
+          // Loss is capped at initial margin
+          const netPnlUsd = Math.max(-pos.initial_margin, rawNetPnlUsd);
           const roePct = pos.initial_margin > 0 ? (netPnlUsd / pos.initial_margin) * 100.0 : 0.0;
 
-          const exitStatus = pos.is_be_moved ? 'BE_HIT' : 'SL_HIT';
-          updates.status = exitStatus;
+          updates.status = 'SL_HIT';
           updates.close_time = now;
           updates.duration_seconds = durationSec;
           updates.exit_price = pos.sl_price;
-          updates.exit_reason = exitStatus;
+          updates.exit_reason = 'SL_HIT';
           updates.gross_pnl_usd = grossPnlUsd;
           updates.fee_usd = totalFee;
           updates.exit_fee = exitFee;
@@ -250,8 +272,7 @@ class TradeExecutor {
           updates.roe_pct = roePct;
 
           await DB.updatePosition(pos.id, updates);
-          const icon = pos.is_be_moved ? '⚡' : '🛑';
-          logger.trade(exitStatus, `${icon} [${exitStatus}] [${exchangeId}] ${pos.symbol} closed at SL (${pos.sl_price}). Realized: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
+          logger.trade('SL_HIT', `🛑 [SL HIT] [BINANCE] ${pos.symbol} closed at SL (${pos.sl_price}). Loss: -$${Math.abs(netPnlUsd).toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
           continue;
         }
 
@@ -319,6 +340,22 @@ class TradeExecutor {
 
     await DB.updatePosition(posId, updates);
     logger.trade('MANUAL_CLOSE', `🖐️ [MANUAL CLOSE] [${exchangeId}] ${pos.symbol} closed at ${closePrice}. Realized PnL: ${netPnlUsd >= 0 ? '+' : ''}$${netPnlUsd.toFixed(2)} USD (${roePct.toFixed(2)}% ROE)`);
+    
+    // Broadcast immediate update to all UIs (Terminal & Livestream)
+    try {
+      const [updatedActive, updatedStats, updatedAll] = await Promise.all([
+        DB.getActivePositions('BINANCE'),
+        DB.getPerformanceStats('BINANCE'),
+        DB.getAllPositions(100, 'BINANCE')
+      ]);
+      notification.broadcast('POSITIONS_UPDATE', {
+        active: updatedActive,
+        positions: updatedActive,
+        stats: updatedStats,
+        all: updatedAll
+      });
+    } catch (e) {}
+
     return updates;
   }
 }

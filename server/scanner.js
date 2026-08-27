@@ -183,9 +183,8 @@ class ScannerEngine {
   constructor() {
     this.isRunning = false;
     this.workers = {};
-    for (const adapter of exchangeManager.getAllExchanges()) {
-      this.workers[adapter.id] = new ExchangeWorker(adapter);
-    }
+    const binanceAdapter = exchangeManager.getExchange('BINANCE');
+    this.workers['BINANCE'] = new ExchangeWorker(binanceAdapter);
     this.positionMonitorTimer = null;
   }
 
@@ -194,11 +193,9 @@ class ScannerEngine {
     this.isRunning = true;
 
     logger.info('SCANNER', '══════════════════════════════════════════════════════════════════════');
-    logger.info('SCANNER', '🚀 STANDARDIZED MULTI-EXCHANGE CONTINUOUS SCANNER INITIALIZED');
-    logger.info('SCANNER', '   • Binance Futures: 500 Symbols x (5m + 15m) = 1,000 Tasks @ 200/min');
-    logger.info('SCANNER', '   • Bybit Linear:    300 Symbols x (5m + 15m) =   600 Tasks @ 120/min');
-    logger.info('SCANNER', '   • OKX Perpetual:   200 Symbols x (5m + 15m) =   400 Tasks @  80/min');
-    logger.info('SCANNER', '   • Independent Queues & Dedicated Rate Budgets (5-Minute Cycles)');
+    logger.info('SCANNER', '🚀 BINANCE FUTURES 24/7 DEDICATED CONTINUOUS SCANNER INITIALIZED');
+    logger.info('SCANNER', '   • Binance Futures: 500+ Symbols x (5m + 15m) = 1,000+ Tasks @ 200/min');
+    logger.info('SCANNER', '   • Dedicated Live Binance WebSocket & Pacing Rate Budget');
     logger.info('SCANNER', '══════════════════════════════════════════════════════════════════════');
 
     await DB.waitUntilReady();
@@ -208,7 +205,7 @@ class ScannerEngine {
       await worker.start();
     }
 
-    this.positionMonitorTimer = setInterval(() => this.monitorOpenPositions(), 5000);
+    this.positionMonitorTimer = setInterval(() => this.monitorOpenPositions(), 2000);
   }
 
   stop() {
@@ -217,15 +214,15 @@ class ScannerEngine {
       worker.stop();
     }
     if (this.positionMonitorTimer) clearInterval(this.positionMonitorTimer);
-    logger.warn('SCANNER', '🛑 Multi-Exchange Scanner Stopped.');
+    logger.warn('SCANNER', '🛑 Binance Futures Scanner Stopped.');
   }
 
   async restart() {
-    logger.info('SCANNER', '🔄 Restarting Multi-Exchange Scanner with new configuration...');
+    logger.info('SCANNER', '🔄 Restarting Binance Futures Scanner with new configuration...');
     this.stop();
     await new Promise(r => setTimeout(r, 1000));
     await this.start();
-    logger.info('SCANNER', '✅ Multi-Exchange Scanner Restarted Successfully!');
+    logger.info('SCANNER', '✅ Binance Futures Scanner Restarted Successfully!');
   }
 
   async ensureDatabasesSeeded() {
@@ -252,6 +249,20 @@ class ScannerEngine {
       }
 
       await tradeExecutor.updateActivePositions(combinedPriceMap);
+
+      // Realtime WebSocket broadcast to all connected UIs (Terminal & Livestream)
+      const [updatedActive, updatedStats, updatedAll] = await Promise.all([
+        DB.getActivePositions('BINANCE'),
+        DB.getPerformanceStats('BINANCE'),
+        DB.getAllPositions(100, 'BINANCE')
+      ]);
+
+      notification.broadcast('POSITIONS_UPDATE', {
+        active: updatedActive,
+        positions: updatedActive,
+        stats: updatedStats,
+        all: updatedAll
+      });
     } catch (err) {
       // non-blocking
     }

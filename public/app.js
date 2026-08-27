@@ -3057,12 +3057,8 @@ function TradingJournalModal({
   }, stats.profitFactor.toFixed(2)))), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 font-mono"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "hidden sm:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 text-[10px]"
-  }, ['ALL', 'BINANCE', 'BYBIT', 'OKX', 'BITGET', 'GATE', 'BINGX'].map(ex => /*#__PURE__*/React.createElement("button", {
-    key: ex,
-    className: `px-2 py-0.5 rounded font-bold transition ${exchangeFilter === ex ? 'bg-binance-yellow text-black shadow' : 'text-slate-400 hover:text-white'}`,
-    onClick: () => setExchangeFilter(ex)
-  }, ex))), /*#__PURE__*/React.createElement("button", {
+    className: "hidden sm:flex items-center bg-binance-bg border border-binance-border rounded px-2 py-0.5 text-[10px] font-bold text-binance-yellow shadow gap-1"
+  }, /*#__PURE__*/React.createElement("span", null, "🔶"), /*#__PURE__*/React.createElement("span", null, "Binance Futures (USDT-M)")), /*#__PURE__*/React.createElement("button", {
     className: "bg-binance-cyan/15 hover:bg-binance-cyan/30 text-binance-cyan border border-binance-cyan/40 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow",
     onClick: handleExportJson,
     title: "Tải về file JSON chi tiết đầy đủ thông số lệnh"
@@ -3770,69 +3766,23 @@ function SetupWizardModal({
     className: "p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-2xl"
-  }, "🌐"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
+  }, "🔶"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
     className: "text-white text-sm block mb-1"
-  }, "Lựa Chọn & Kích Hoạt Danh Sách Sàn Giao Dịch Phái Sinh"), /*#__PURE__*/React.createElement("p", {
+  }, "Môi Trường Giao Dịch: Binance Futures (USDT-M)"), /*#__PURE__*/React.createElement("p", {
     className: "text-slate-400 text-[11px] leading-relaxed"
-  }, "Bật/Tắt các sàn giao dịch mong muốn. Hệ thống sẽ tự động quét, lọc thanh khoản và nạp ", /*#__PURE__*/React.createElement("b", null, "top 90% hợp đồng USDT Perpetual"), " của các sàn được chọn."))), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 sm:grid-cols-3 gap-2.5"
-  }, [{
-    id: 'BINANCE',
-    name: 'Binance Futures',
-    icon: '🔶',
-    approx: '~631 Perps',
-    desc: 'USDT-M Perpetual'
-  }, {
-    id: 'BYBIT',
-    name: 'Bybit Linear',
-    icon: '⬛',
-    approx: '~655 Perps',
-    desc: 'Linear V5 Perpetual'
-  }, {
-    id: 'OKX',
-    name: 'OKX Perpetual',
-    icon: '🔷',
-    approx: '~394 Perps',
-    desc: 'USDT Perpetual Swap'
-  }, {
-    id: 'BITGET',
-    name: 'Bitget Perpetual',
-    icon: '🔵',
-    approx: '~684 Perps',
-    desc: 'USDT-M Perpetual'
-  }, {
-    id: 'GATE',
-    name: 'Gate.io Perpetual',
-    icon: '🚪',
-    approx: '~843 Perps',
-    desc: 'USDT Perpetual'
-  }, {
-    id: 'BINGX',
-    name: 'BingX Perpetual',
-    icon: '💠',
-    approx: '~738 Perps',
-    desc: 'Swap Perpetual'
-  }].map(ex => {
-    const isChecked = !!enabledExchanges[ex.id];
-    return /*#__PURE__*/React.createElement("div", {
-      key: ex.id,
-      onClick: () => toggleExchange(ex.id),
-      className: `p-3 rounded-lg border cursor-pointer transition flex flex-col justify-between gap-2 ${isChecked ? 'bg-[#111726] border-binance-yellow shadow-md shadow-binance-yellow/10' : 'bg-[#090D16] border-binance-border opacity-50'}`
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-between"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "font-bold text-white flex items-center gap-1.5"
-    }, /*#__PURE__*/React.createElement("span", null, ex.icon), /*#__PURE__*/React.createElement("span", null, ex.name)), /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: isChecked,
-      onChange: () => {},
-      className: "w-4 h-4 accent-binance-yellow cursor-pointer"
-    })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-      className: "text-binance-yellow font-bold text-[11px] block"
-    }, ex.approx), /*#__PURE__*/React.createElement("span", {
-      className: "text-slate-400 text-[10px]"
-    }, ex.desc)));
-  })), /*#__PURE__*/React.createElement("div", {
+  }, "Hệ thống hoạt động chuyên biệt và tối ưu hóa 100% cho ", /*#__PURE__*/React.createElement("b", null, "Binance Futures"), ". Tự động kết nối WebSocket Live Price và quét hơn ", /*#__PURE__*/React.createElement("b", null, "500+ cặp hợp đồng vĩnh cửu"), " 24/7."))), /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-lg border border-binance-yellow bg-[#111726] shadow-md flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-3xl"
+  }, "🔶"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-extrabold text-white text-base block"
+  }, "Binance Futures (USDT-M Perpetual)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-slate-400 text-xs"
+  }, "500+ Liquid Pairs • WebSocket Live Streams • VIP Fee Schedules"))), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-yellow text-black font-black text-xs px-3 py-1 rounded"
+  }, "ĐANG HOẠT ĐỘNG")), /*#__PURE__*/React.createElement("div", {
     className: "p-3 bg-[#111726] rounded-lg border border-binance-border flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-2 cursor-pointer"
@@ -3843,11 +3793,11 @@ function SetupWizardModal({
     className: "w-4 h-4 accent-binance-yellow rounded cursor-pointer"
   }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("b", {
     className: "text-white"
-  }, "Tự động nạp 90% symbol perpetual qua CCXT Pro sau khi hoàn tất"), /*#__PURE__*/React.createElement("span", {
+  }, "Tự động nạp 90% symbol Binance Futures qua CCXT Pro sau khi hoàn tất"), /*#__PURE__*/React.createElement("span", {
     className: "text-slate-400 text-[10px] block"
   }, "Lọc danh sách hợp đồng theo khối lượng thanh khoản 24h thực tế."))), /*#__PURE__*/React.createElement("span", {
     className: "text-binance-cyan font-bold text-xs"
-  }, activeExchangesList.length, " / 6 Sàn Đã Bật"))), step === 4 && /*#__PURE__*/React.createElement("div", {
+  }, "Binance Active"))), step === 4 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-4"
   }, /*#__PURE__*/React.createElement("div", {
     className: "p-3 bg-binance-card rounded-lg border border-binance-border flex items-start gap-3"
@@ -3912,12 +3862,12 @@ function SetupWizardModal({
 
 // ── ROOT APPLICATION COMPONENT ──
 function App() {
-  const [selectedExchange, setSelectedExchange] = useState('ALL');
+  const [selectedExchange, setSelectedExchange] = useState('BINANCE');
   const [bottomTab, setBottomTab] = useState('signals');
   const [isDeskCollapsed, setIsDeskCollapsed] = useState(false);
 
   // Left Market Watchlist state
-  const [leftExchangeTab, setLeftExchangeTab] = useState('ALL');
+  const [leftExchangeTab, setLeftExchangeTab] = useState('BINANCE');
   const [leftCategoryFilter, setLeftCategoryFilter] = useState('ALL'); // ALL, SIGNALS, GAINERS, LOSERS
   const [watchlistSearch, setWatchlistSearch] = useState('');
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
@@ -4259,33 +4209,10 @@ function App() {
   }, "STAT2 FUTURES PRO"), /*#__PURE__*/React.createElement("span", {
     className: "sm:hidden font-black"
   }, "STAT2")), /*#__PURE__*/React.createElement("div", {
-    className: "hidden md:flex items-center bg-binance-bg border border-binance-border rounded p-0.5 gap-0.5 overflow-x-auto"
-  }, [{
-    id: 'ALL',
-    label: `🌐 ALL (${countAll})`
-  }, {
-    id: 'BINANCE',
-    label: `🔶 Binance (${countBinance})`
-  }, {
-    id: 'BYBIT',
-    label: `⬛ Bybit (${countBybit})`
-  }, {
-    id: 'OKX',
-    label: `🔷 OKX (${countOkx})`
-  }, {
-    id: 'BITGET',
-    label: `🔵 Bitget (${countBitget})`
-  }, {
-    id: 'GATE',
-    label: `🚪 Gate (${countGate})`
-  }, {
-    id: 'BINGX',
-    label: `💠 BingX (${countBingx})`
-  }].map(tab => /*#__PURE__*/React.createElement("button", {
-    key: tab.id,
-    className: `px-2 py-0.5 rounded text-[10.5px] font-bold transition whitespace-nowrap ${selectedExchange === tab.id ? 'bg-binance-active text-binance-yellow shadow' : 'text-binance-textSec hover:text-white'}`,
-    onClick: () => setSelectedExchange(tab.id)
-  }, tab.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "hidden md:flex items-center bg-binance-bg border border-binance-border rounded px-2 py-0.5 gap-1 text-[11px] font-bold text-binance-yellow shadow"
+  }, /*#__PURE__*/React.createElement("span", null, "🔶"), /*#__PURE__*/React.createElement("span", null, "Binance Futures (USDT-M)"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-binance-active px-1.5 py-0.2 rounded text-[10px] text-white font-mono"
+  }, countBinance || countAll, " Pairs"))), /*#__PURE__*/React.createElement("div", {
     className: "hidden lg:flex items-center gap-2 font-mono text-xs"
   }, /*#__PURE__*/React.createElement("span", {
     className: "font-black text-white"
@@ -4365,34 +4292,12 @@ function App() {
     className: "lg:hidden text-binance-textSec hover:text-white text-xs font-bold px-2 py-0.5 rounded bg-binance-card border border-binance-border",
     onClick: () => setIsMobileDrawerOpen(false)
   }, "✕ Close")), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-4 sm:grid-cols-7 gap-1 font-mono text-[10px]"
-  }, [{
-    id: 'ALL',
-    label: '🌐 ALL'
-  }, {
-    id: 'BINANCE',
-    label: '🔶 BNC'
-  }, {
-    id: 'BYBIT',
-    label: '⬛ BYB'
-  }, {
-    id: 'OKX',
-    label: '🔷 OKX'
-  }, {
-    id: 'BITGET',
-    label: '🔵 BGT'
-  }, {
-    id: 'GATE',
-    label: '🚪 GATE'
-  }, {
-    id: 'BINGX',
-    label: '💠 BGX'
-  }].map(tab => /*#__PURE__*/React.createElement("button", {
-    key: tab.id,
-    className: `py-1 rounded font-bold transition text-center border truncate ${leftExchangeTab === tab.id ? 'bg-binance-yellow text-black border-binance-yellow shadow' : 'bg-binance-card text-binance-textSec border-binance-border hover:text-white'}`,
-    onClick: () => setLeftExchangeTab(tab.id),
-    title: `Lọc cặp giao dịch sàn ${tab.id}`
-  }, tab.label))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between bg-binance-card border border-binance-border rounded px-2 py-1 text-[10.5px] font-bold text-binance-yellow font-mono"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement("span", null, "🔶"), /*#__PURE__*/React.createElement("span", null, "Binance Futures (USDT-M)")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[9.5px] text-slate-400 font-normal"
+  }, "24/7 Live")), /*#__PURE__*/React.createElement("div", {
     className: "relative"
   }, /*#__PURE__*/React.createElement("input", {
     type: "text",

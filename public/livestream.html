@@ -54,9 +54,28 @@
     }
   </script>
 
+  <link rel="stylesheet" href="/styles.css">
+
+  <!-- Lightweight Charts Local + CDN Fallback -->
+  <script src="/libs/lightweight-charts.standalone.production.js"></script>
+  <script>
+    if (typeof LightweightCharts === 'undefined') {
+      document.write('<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"><' + '/script>');
+    }
+  </script>
+
   <!-- React 18 Production Standalone -->
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Universal JavaScript SMC & STAT2 Indicators Suite -->
+  <script src="/smc.js"></script>
+  <script src="/indicators/registry.js"></script>
+  <script src="/indicators/indicator_atrbot.js"></script>
+  <script src="/indicators/indicator_stat2_box_strategy.js"></script>
+  <script src="/indicators/indicator_smc.js"></script>
+  <script src="/indicators/indicator_ema.js"></script>
+  <script src="/indicators/indicator_vwap.js"></script>
 
   <style>
     /* Custom Scrollbars */
