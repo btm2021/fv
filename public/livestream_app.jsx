@@ -978,33 +978,50 @@ function LivestreamApp() {
       };
 
       ws.onclose = () => {
-        setWsStatus('disconnected');
+        setWsStatus('fallback');
         wsRef.current = null;
         if (!reconnectTimeoutRef.current) {
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
             connectWebSocket();
-          }, 2000);
+          }, 3000);
         }
       };
 
       ws.onerror = () => {
-        setWsStatus('disconnected');
-        ws.close();
+        setWsStatus('fallback');
+        try { ws.close(); } catch (e) {}
       };
     } catch (e) {
-      setWsStatus('disconnected');
+      setWsStatus('fallback');
     }
   }, [fetchData]);
 
+  // Connect on mount
   useEffect(() => {
     connectWebSocket();
     fetchData();
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch (e) {}
+      }
     };
   }, [connectWebSocket, fetchData]);
+
+  // ── RESILIENT AUTO-POLLING FALLBACK WHEN WEBSOCKET IS BLOCKED OR DISCONNECTED ──
+  useEffect(() => {
+    let pollTimer = null;
+    if (wsStatus !== 'connected') {
+      // High-speed 1.5s fallback polling ensures uninterrupted live data on VPS/DuckDNS
+      pollTimer = setInterval(() => {
+        fetchData();
+      }, 1500);
+    }
+    return () => {
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [wsStatus, fetchData]);
 
   // Handle Manual Market Close
   const handleClosePosition = async (posId) => {
